@@ -1,0 +1,22 @@
+{
+  "name": "goc-kb-orchestrator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx --env-file ../.env src/index.ts --once",
+    "dev:watch": "tsx watch --env-file ../.env src/index.ts --once",
+    "ingest": "tsx --env-file ../.env src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "node-cron": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}

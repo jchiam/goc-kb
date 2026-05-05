@@ -1,0 +1,24 @@
+services:
+  orchestrator:
+    build: ./orchestrator
+    volumes:
+      - "${OBSIDIAN_VAULT_PATH}:/vault"
+      - "${GRANOLA_SUPABASE_PATH}:/root/.config/granola/supabase.json:ro"
+      - "./state:/state"
+      - "./rclone/rclone.conf:/root/.config/rclone/rclone.conf:ro"
+    environment:
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-0 * * * *}
+      - VAULT_PATH=/vault
+      - STATE_FILE=/state/state.json
+      - MEETINGS_FOLDER=${MEETINGS_FOLDER:-wiki/meetings}
+      - RCLONE_DEST=${RCLONE_DEST}
+      - LOOKBACK_DAYS=${LOOKBACK_DAYS:-30}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-bedrock.claude-sonnet-4-6}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "granola", "meeting", "list", "--limit", "1", "-o", "json"]
+      interval: 60s
+      retries: 3
+      start_period: 10s
