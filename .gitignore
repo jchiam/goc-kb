@@ -1,8 +1,15 @@
+# Dependencies
 node_modules/
 dist/
+
+# Secrets and credentials
 .env
 rclone/rclone.conf
-*.log
+
+# Runtime state
 state/state.json
+*.log
+
+# Claude Code — allow project permissions, ignore everything else
 .claude/*
 !.claude/settings.json
