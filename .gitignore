@@ -4,3 +4,5 @@ dist/
 rclone/rclone.conf
 *.log
 state/state.json
+.claude/*
+!.claude/settings.json
