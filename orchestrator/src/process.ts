@@ -45,7 +45,14 @@ function parseResponse(text: string): LLMOutput {
     .replace(/\n?```\s*$/, '')
     .trim();
 
-  const parsed = JSON.parse(cleaned) as LLMOutput;
+  let parsed: LLMOutput;
+  try {
+    parsed = JSON.parse(cleaned) as LLMOutput;
+  } catch (err) {
+    const pos = (err instanceof SyntaxError && 'position' in err) ? (err as SyntaxError & { position?: number }).position ?? -1 : -1;
+    const snippet = pos >= 0 ? cleaned.slice(Math.max(0, pos - 80), pos + 80) : cleaned.slice(0, 200);
+    throw new Error(`Claude response is not valid JSON near position ${pos}:\n${snippet}\n\nFull response length: ${cleaned.length} chars`);
+  }
 
   if (typeof parsed.meetingNote !== 'string') throw new Error('Response missing meetingNote');
   if (!Array.isArray(parsed.conceptNotes)) throw new Error('Response missing conceptNotes');
