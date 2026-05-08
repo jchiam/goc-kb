@@ -6,7 +6,7 @@ Automated meeting note pipeline: Granola → Claude (wiki enrichment) → Obsidi
 
 - **Runtime**: Node.js 24 + TypeScript (`orchestrator/`)
 - **Container**: Docker Compose (single service, `node:24-alpine`)
-- **Granola data**: `granola-cli` npm package — reads via Granola's API
+- **Granola data**: Direct HTTP client (`granola-client.ts`) — calls Granola API with self-managed WorkOS tokens
 - **AI enrichment**: Anthropic SDK with prompt caching (`cache_control: ephemeral` on system prompt)
 - **Sync**: rclone to Google Drive
 
@@ -17,7 +17,8 @@ goc-kb/
 ├── orchestrator/
 │   ├── src/
 │   │   ├── index.ts      # cron entry point; runs pipeline immediately then on schedule
-│   │   ├── ingest.ts     # granola-cli wrapper, state tracking, pipeline orchestration
+│   │   ├── granola-client.ts  # Granola HTTP API client with token lifecycle
+│   │   ├── ingest.ts     # pipeline orchestration, state tracking
 │   │   ├── process.ts    # Claude API call; returns meetingNote + conceptNotes JSON
 │   │   ├── write.ts      # writes meeting notes + concept pages to vault
 │   │   ├── sync.ts       # rclone sync vault → RCLONE_DEST
@@ -59,7 +60,7 @@ npm run build            # tsc compile to dist/
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
 | `ANTHROPIC_BASE_URL` | No | — | Custom base URL (local Claude / proxy) |
 | `CLAUDE_MODEL` | No | `bedrock.claude-sonnet-4-6` | Model ID passed to API |
-| `GRANOLA_SUPABASE_PATH` | Yes | `~/Library/Application Support/Granola/supabase.json` | Granola auth file |
+| `GRANOLA_SUPABASE_PATH` | Yes | `~/Library/Application Support/Granola/supabase.json` | Bootstrap auth file (only needed on first run) |
 | `OBSIDIAN_VAULT_PATH` | Yes | — | Absolute path to vault root on host |
 | `RCLONE_DEST` | Yes | — | `remote:path` rclone sync target |
 | `CRON_SCHEDULE` | No | `0 * * * *` | Cron expression |
@@ -70,9 +71,11 @@ npm run build            # tsc compile to dist/
 
 ## Architecture notes
 
-**Granola auth**: `granola-cli` reads credentials from `GRANOLA_SUPABASE_PATH` — the Granola desktop app's Supabase auth file. In Docker, this is mounted to `/root/.config/granola/supabase.json:ro`. `runPipeline` checks the file exists at startup and throws a clear error if missing. No separate auth step needed — the live mount picks up token refreshes automatically.
+**Granola auth**: Direct HTTP client (`granola-client.ts`) calling `https://api.granola.ai`. On first run, bootstraps access/refresh tokens from `GRANOLA_SUPABASE_PATH` (the Granola desktop app's auth file, bind-mounted read-only). Tokens are cached to `state/tokens.json`. On 401, attempts refresh via WorkOS API.
 
-> Do not reintroduce a SQLite/file-reading path — granola-cli uses Granola's API.
+> **Known limitation**: WorkOS token refresh is currently broken — the correct OAuth `client_id` for the refresh endpoint is unknown (neither `client_GranolaMac` nor the JWT `azp` claim work). Access tokens last ~6 hours. After expiry, the pipeline fails until re-bootstrapped.
+
+> No dependency on `granola-cli` npm package. All Granola API calls are direct HTTP.
 
 **State tracking**: `state/state.json` stores `{ lastProcessedAt, processedIds[] }`. Written atomically (temp file + rename) after each successful meeting. `processedIds` capped at 500. Delete to reprocess from `LOOKBACK_DAYS` horizon.
 
@@ -86,9 +89,28 @@ npm run build            # tsc compile to dist/
 
 **Prompt files**: Edit `orchestrator/prompts/meeting-note.md` to tune output format. `concept-note.md` is a format reference only — not loaded by the orchestrator.
 
+## Operations
+
+### Re-bootstrapping Granola auth (when pipeline fails with "Token refresh failed" or 401)
+
+1. Open Granola desktop app (refreshes `supabase.json` with a fresh access token)
+2. Wait for next cron tick (or restart container: `docker compose restart orchestrator`)
+
+That's it — `rebootstrapIfFresher()` in `granola-client.ts` automatically detects the fresher token in `supabase.json` and replaces the cached one. No need to manually delete `state/tokens.json`.
+
+The fresh token lasts ~6 hours. With `CRON_SCHEDULE=0 * * * *` (hourly), this covers ~6 pipeline runs per bootstrap.
+
+### Extending token lifetime (future fix)
+
+The blocker is finding the correct WorkOS OAuth `client_id` for the refresh endpoint. Candidates tried and rejected:
+- `client_GranolaMac` (granola-cli default) → "Invalid client id"
+- `client_01JZJ0XBDAT8PHJWQY09Y0VD61` (JWT `azp` claim) → "Invalid client id"
+
+To investigate: check the Granola desktop app bundle (`/Applications/Granola.app/Contents/Resources/`) for a hardcoded WorkOS client_id, or intercept the desktop app's refresh calls via a proxy.
+
 ## Constraints
 
 - `CLAUDE_MODEL` default is `bedrock.claude-sonnet-4-6` — the API key only allows Bedrock model IDs
-- `rclone/rclone.conf`, `.env`, `state/state.json` are never committed
+- `rclone/rclone.conf`, `.env`, `state/state.json`, `state/tokens.json` are never committed
 - No hardcoded paths in code — all configurable via env vars
 - Vault folder structure follows claude-obsidian conventions: `wiki/meetings/`, `wiki/concepts/` — do not invent new folders

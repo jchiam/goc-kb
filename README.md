@@ -9,10 +9,7 @@ Your native Obsidian app reads the same vault directory the whole time. The cont
 ## How it works
 
 ```
-Granola API
-    │
-    ▼
-granola-cli (fetches new meetings)
+Granola API (direct HTTP via granola-client.ts)
     │
     ▼
 Orchestrator (TypeScript)
@@ -41,7 +38,6 @@ For each new meeting, Claude produces:
 | Obsidian vault | Existing vault with [claude-obsidian](https://github.com/AgriciDaniel/claude-obsidian) default structure |
 | Anthropic API key | [console.anthropic.com](https://console.anthropic.com) |
 | rclone | `brew install rclone` |
-| granola-cli | `npm install -g granola-cli` — [source](https://github.com/magarcia/granola-cli) |
 
 ---
 
@@ -62,8 +58,8 @@ ANTHROPIC_API_KEY=sk-ant-...
 # Optional: custom base URL for local Claude or custom endpoint
 ANTHROPIC_BASE_URL=
 
-# Claude model (defaults to claude-sonnet-4-6 if not set)
-CLAUDE_MODEL=claude-sonnet-4-6
+# Claude model (defaults to bedrock.claude-sonnet-4-6 if not set)
+CLAUDE_MODEL=bedrock.claude-sonnet-4-6
 
 # Granola's Supabase auth file (from Granola desktop app)
 GRANOLA_SUPABASE_PATH=~/Library/Application Support/Granola/supabase.json
@@ -78,22 +74,12 @@ RCLONE_DEST=gdrive:Granola Notes
 CRON_SCHEDULE=0 * * * *
 
 # Lookback window for new meetings (days)
-LOOKBACK_DAYS=7
+LOOKBACK_DAYS=30
 ```
 
 See `.env.example` for all available options.
 
-### 2. Verify granola-cli access
-
-No separate auth step needed — the container reads Granola's existing auth file directly. Just confirm the CLI works on the host:
-
-```bash
-granola meeting list --limit 5
-```
-
-If this fails, make sure the Granola desktop app is installed and you are signed in.
-
-### 3. Configure rclone
+### 2. Configure rclone
 
 Run the interactive setup once on the host:
 
@@ -114,7 +100,7 @@ Set the Google Drive destination folder in `.env`:
 RCLONE_DEST=gdrive:Obsidian/MyVault
 ```
 
-### 4. Run
+### 3. Run
 
 ```bash
 docker compose up -d
@@ -126,7 +112,7 @@ Check logs:
 docker compose logs -f orchestrator
 ```
 
-The first run processes all meetings from the last 30 days. Subsequent runs only process new meetings since the last run (tracked in `state/state.json`).
+The first run processes all meetings from the lookback window (default 30 days). Subsequent runs only process new meetings since the last run (tracked in `state/state.json`).
 
 ---
 
@@ -136,12 +122,12 @@ The first run processes all meetings from the last 30 days. Subsequent runs only
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
 | `ANTHROPIC_BASE_URL` | No | — | Custom base URL for local Claude or proxy |
-| `CLAUDE_MODEL` | No | `claude-sonnet-4-6` | Claude model ID |
-| `GRANOLA_SUPABASE_PATH` | Yes | — | Path to Granola's Supabase auth file |
+| `CLAUDE_MODEL` | No | `bedrock.claude-sonnet-4-6` | Claude model ID |
+| `GRANOLA_SUPABASE_PATH` | No | `~/Library/Application Support/Granola/supabase.json` | Path to Granola's Supabase auth file |
 | `OBSIDIAN_VAULT_PATH` | Yes | — | Absolute path to vault root on host |
 | `RCLONE_DEST` | Yes | — | `remote:path` for rclone sync target |
 | `CRON_SCHEDULE` | No | `0 * * * *` | Cron expression for pipeline frequency |
-| `LOOKBACK_DAYS` | No | `7` | Days of history to process on first run |
+| `LOOKBACK_DAYS` | No | `30` | Days of history to process on first run |
 
 ---
 
@@ -220,7 +206,7 @@ All state lives in mounted volumes or `.env`:
 |---|---|
 | Processed meeting IDs | `state/state.json` |
 | rclone credentials | `rclone/rclone.conf` |
-| granola-cli credentials | `~/Library/Application Support/Granola/supabase.json` (host, read-only mount) |
+| Granola auth tokens | `~/Library/Application Support/Granola/supabase.json` (host, read-only mount) |
 | Pipeline config | `.env` |
 
 Moving to a new machine: clone the repo, copy `.env` and `rclone/rclone.conf`, install Granola and sign in (creates `supabase.json`), `docker compose up -d`.
@@ -250,7 +236,10 @@ Replace `gdrive:"Granola Notes"` with your `RCLONE_DEST` value from `.env`.
 ## Troubleshooting
 
 **No meetings appearing**
-Run `granola meeting list` on the host to confirm auth works. Check `state/state.json` — delete it to reprocess from scratch.
+Check that Granola desktop is signed in (creates `supabase.json`). Check `state/state.json` — delete it to reprocess from scratch.
+
+**Auth token expired (401 or "Token refresh failed")**
+Open Granola desktop app (refreshes `supabase.json`). The pipeline auto-detects the fresher token on next run.
 
 **rclone sync failing**
 Run `rclone lsd gdrive:` on the host to confirm the remote is reachable. Re-copy `rclone.conf` if it's stale.
