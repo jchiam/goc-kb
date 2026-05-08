@@ -100,17 +100,27 @@ Set the Google Drive destination folder in `.env`:
 RCLONE_DEST=gdrive:Obsidian/MyVault
 ```
 
-### 3. Run
+### 3. Install root dependencies
 
 ```bash
-docker compose up -d
+npm install
+```
+
+This installs `cross-env` which ensures Docker builds work cross-platform (macOS and Windows PowerShell).
+
+### 4. Run
+
+```bash
+npm run docker:up
 ```
 
 Check logs:
 
 ```bash
-docker compose logs -f orchestrator
+npm run docker:logs
 ```
+
+Available scripts: `docker:build`, `docker:up`, `docker:down`, `docker:logs`.
 
 The first run processes all meetings from the lookback window (default 30 days). Subsequent runs only process new meetings since the last run (tracked in `state/state.json`).
 
