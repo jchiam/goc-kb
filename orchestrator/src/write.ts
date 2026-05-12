@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProcessedMeeting } from './types.js';
 
@@ -13,6 +13,18 @@ function slugify(text: string): string {
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .slice(0, 60);
+}
+
+function logDiff(path: string, existing: string, updated: string): void {
+  const oldLines = existing.split('\n').length;
+  const newLines = updated.split('\n').length;
+  console.log(`Updating: ${path} (${oldLines} → ${newLines} lines)`);
+  const oldHeaders: string[] = existing.match(/^## .+$/gm) ?? [];
+  const newHeaders: string[] = updated.match(/^## .+$/gm) ?? [];
+  const added = newHeaders.filter((h) => !oldHeaders.includes(h));
+  const removed = oldHeaders.filter((h) => !newHeaders.includes(h));
+  if (added.length) console.log(`  + sections: ${added.join(', ')}`);
+  if (removed.length) console.log(`  - sections: ${removed.join(', ')}`);
 }
 
 export function writeMeetingNote(processed: ProcessedMeeting, dryRun = false): void {
@@ -32,10 +44,16 @@ export function writeMeetingNote(processed: ProcessedMeeting, dryRun = false): v
   }
 
   mkdirSync(meetingsDir, { recursive: true });
+
   if (existsSync(filePath)) {
-    console.log(`Skipped (already exists): ${filePath}`);
-    return;
+    const existing = readFileSync(filePath, 'utf-8');
+    if (existing === meetingNote) {
+      console.log(`Unchanged: ${filePath}`);
+      return;
+    }
+    logDiff(filePath, existing, meetingNote);
   }
+
   writeFileSync(filePath, meetingNote, 'utf-8');
   console.log(`Written: ${filePath}`);
 
@@ -44,9 +62,12 @@ export function writeMeetingNote(processed: ProcessedMeeting, dryRun = false): v
 
   for (const concept of conceptNotes) {
     const conceptPath = join(conceptsDir, `${concept.slug}.md`);
-    if (!existsSync(conceptPath)) {
-      writeFileSync(conceptPath, concept.content, 'utf-8');
-      console.log(`Created concept: ${concept.slug}`);
+    if (existsSync(conceptPath)) {
+      const existing = readFileSync(conceptPath, 'utf-8');
+      if (existing === concept.content) continue;
+      logDiff(conceptPath, existing, concept.content);
     }
+    writeFileSync(conceptPath, concept.content, 'utf-8');
+    console.log(`Written concept: ${concept.slug}`);
   }
 }

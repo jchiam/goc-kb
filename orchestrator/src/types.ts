@@ -1,12 +1,21 @@
 export interface State {
   lastProcessedAt: string;
   processedIds: string[];
+  processedMeta?: Record<string, { updatedAt: string }>;
+}
+
+export interface GranolaTokens {
+  accessToken: string;
+  refreshToken: string;
+  clientId: string;
+  lastRefreshedAt?: string;
 }
 
 export interface GranolaMeeting {
   id: string;
   title: string;
   created_at: string;
+  updated_at?: string;
   workspace_id?: string;
 }
 

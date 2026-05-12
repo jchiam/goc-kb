@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["node", "node-cron"]
+    "types": ["node"]
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]
