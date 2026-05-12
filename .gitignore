@@ -8,6 +8,7 @@ rclone/rclone.conf
 
 # Runtime state
 state/state.json
+state/tokens.json
 *.log
 
 # Claude Code — allow project permissions, ignore everything else

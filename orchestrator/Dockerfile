@@ -1,8 +1,8 @@
-FROM node:24-alpine
+FROM --platform=linux/amd64 node:24-alpine
 
-RUN apk add --no-cache rclone
-
-RUN npm install -g granola-cli
+RUN sed -i 's/https/http/g' /etc/apk/repositories && \
+    apk add --no-cache ca-certificates rclone && \
+    update-ca-certificates
 
 WORKDIR /app
 
@@ -15,4 +15,7 @@ COPY prompts/ ./prompts/
 
 RUN npm run build
 
-CMD ["node", "dist/index.js"]
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

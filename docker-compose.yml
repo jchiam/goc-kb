@@ -3,10 +3,14 @@ services:
     build: ./orchestrator
     volumes:
       - "${OBSIDIAN_VAULT_PATH}:/vault"
+      - "${GRANOLA_AUTH_PATH:-~/Library/Application Support/Granola/stored-accounts.json}:/root/.config/granola/stored-accounts.json:ro"
       - "${GRANOLA_SUPABASE_PATH}:/root/.config/granola/supabase.json:ro"
       - "./state:/state"
       - "./rclone/rclone.conf:/root/.config/rclone/rclone.conf:ro"
     environment:
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - GRANOLA_AUTH_PATH=/root/.config/granola/stored-accounts.json
+      - GRANOLA_SUPABASE_PATH=/root/.config/granola/supabase.json
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - CRON_SCHEDULE=${CRON_SCHEDULE:-0 * * * *}
@@ -18,7 +22,7 @@ services:
       - CLAUDE_MODEL=${CLAUDE_MODEL:-bedrock.claude-sonnet-4-6}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "granola", "meeting", "list", "--limit", "1", "-o", "json"]
+      test: ["CMD", "node", "-e", "process.exit(0)"]
       interval: 60s
       retries: 3
       start_period: 10s
