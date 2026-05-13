@@ -4,7 +4,7 @@
     "docker:build": "cross-env BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose build",
     "docker:up": "cross-env BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose up -d --build",
     "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f"
+    "docker:logs": "docker compose logs -f | while IFS= read -r line; do printf '%s %s\n' "$(TZ=Asia/Singapore date '+%H:%M:%S')" "$line"; done"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
