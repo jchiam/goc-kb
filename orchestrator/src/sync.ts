@@ -15,6 +15,6 @@ export function syncVault(dryRun = false): void {
   }
 
   console.log(`Syncing ${VAULT_PATH} → ${RCLONE_DEST}`);
-  execSync(`rclone sync "${VAULT_PATH}" "${RCLONE_DEST}" --progress`, { stdio: 'inherit' });
+  execSync(`rclone sync "${VAULT_PATH}" "${RCLONE_DEST}" --stats-one-line -v`, { stdio: 'inherit' });
   console.log('Sync complete');
 }

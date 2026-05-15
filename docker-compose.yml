@@ -6,7 +6,7 @@ services:
       - "${GRANOLA_AUTH_PATH:-~/Library/Application Support/Granola/stored-accounts.json}:/root/.config/granola/stored-accounts.json:ro"
       - "${GRANOLA_SUPABASE_PATH}:/root/.config/granola/supabase.json:ro"
       - "./state:/state"
-      - "./rclone/rclone.conf:/root/.config/rclone/rclone.conf:ro"
+      - "${RCLONE_CONFIG:-~/.config/rclone/rclone.conf}:/root/.config/rclone/rclone.conf:ro"
     environment:
       - NODE_TLS_REJECT_UNAUTHORIZED=0
       - GRANOLA_AUTH_PATH=/root/.config/granola/stored-accounts.json
