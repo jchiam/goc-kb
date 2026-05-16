@@ -20,7 +20,7 @@ goc-kb/
 │   │   ├── granola-client.ts  # Granola HTTP API client with token lifecycle
 │   │   ├── ingest.ts     # pipeline orchestration, state tracking
 │   │   ├── process.ts    # Claude API call; returns meetingNote + conceptNotes JSON
-│   │   ├── write.ts      # writes meeting notes + concept pages to vault
+│   │   ├── write.ts      # writes enriched source files to .raw/transcripts/
 │   │   ├── sync.ts       # rclone sync vault → RCLONE_DEST
 │   │   └── types.ts      # shared interfaces
 │   ├── prompts/
@@ -65,7 +65,6 @@ npm run build            # tsc compile to dist/
 | `RCLONE_DEST` | Yes | — | `remote:path` rclone sync target |
 | `CRON_SCHEDULE` | No | `0 * * * *` | Cron expression |
 | `LOOKBACK_DAYS` | No | `30` | Days of history on first run |
-| `MEETINGS_FOLDER` | No | `wiki/meetings` | Vault subfolder for meeting notes |
 | `VAULT_PATH` | No | `OBSIDIAN_VAULT_PATH` / `/vault` | Resolved vault path (set by Docker) |
 | `STATE_FILE` | No | `../state/state.json` | State file path (set by Docker to `/state/state.json`) |
 
@@ -79,11 +78,13 @@ npm run build            # tsc compile to dist/
 
 **State tracking**: `state/state.json` stores `{ lastProcessedAt, processedIds[] }`. Written atomically (temp file + rename) after each successful meeting. `processedIds` capped at 500. Delete to reprocess from `LOOKBACK_DAYS` horizon.
 
-**Deduplication**: Two layers — state-based (skip IDs in `processedIds`) and file-based (`existsSync` on meeting note and concept paths). File-based dedup is what prevents re-processing across devices when vault is synced from Google Drive first.
+**Deduplication**: Two layers — state-based (skip IDs in `processedIds`) and file-based (`existsSync` on `.raw/transcripts/` source path). File-based dedup prevents re-processing across devices when vault is synced from Google Drive first.
 
 **Claude call** (`process.ts`): Single `messages.create` call per meeting. System prompt (`meeting-note.md`) is cached via `cache_control: ephemeral`. Response must be JSON `{ meetingNote: string, conceptNotes: ConceptNote[] }` — strip optional markdown fences before parsing.
 
-**Vault writes** (`write.ts`): Meeting notes → `$VAULT_PATH/$MEETINGS_FOLDER/<date>-<slug>.md`. Concept pages → `$VAULT_PATH/wiki/concepts/<slug>.md`. Both skip if file already exists. `VAULT_PATH` resolves: `VAULT_PATH` env → `OBSIDIAN_VAULT_PATH` env → `/vault`.
+**Raw source writes** (`write.ts`): Enriched meeting notes → `$VAULT_PATH/.raw/transcripts/<date>-<slug>.md`. Each file contains merged frontmatter (title, date, granola_id, attendees, tags, type: meeting-transcript), the enriched meeting body, and extracted concepts as appendix sections. Skipped if file already exists. `VAULT_PATH` resolves: `VAULT_PATH` env → `OBSIDIAN_VAULT_PATH` env → `/vault`.
+
+**Wiki-ingest integration**: The orchestrator writes to `.raw/transcripts/` only. The `claude-obsidian:wiki-ingest` skill processes these source files into full wiki pages (`wiki/sources/`, `wiki/entities/`, `wiki/concepts/`), updates `index.md`, `log.md`, `hot.md`, and handles cross-referencing. Trigger wiki-ingest manually after orchestrator runs, or set up a durable Claude Code cron (7-day auto-expiry).
 
 **rclone sync** (`sync.ts`): Runs after all meetings in a batch are written. Skipped if `RCLONE_DEST` unset or dry-run. Syncs `VAULT_PATH` only — `state.json` is not synced.
 
@@ -100,6 +101,10 @@ That's it — `rebootstrapIfFresher()` in `granola-client.ts` automatically dete
 
 The fresh token lasts ~6 hours. With `CRON_SCHEDULE=0 * * * *` (hourly), this covers ~6 pipeline runs per bootstrap.
 
+### Wiki-ingest cron (re-setup every 7 days)
+
+A durable Claude Code cron checks `.raw/transcripts/` hourly at :17 for new files and runs `claude-obsidian:wiki-ingest` on them. The cron is self-renewing — it reads `.claude/scheduled_tasks.json` each firing and re-creates itself before the 7-day auto-expiry. If it somehow lapses, ask Claude Code: "Set up the wiki-ingest cron again."
+
 ### Extending token lifetime (future fix)
 
 The blocker is finding the correct WorkOS OAuth `client_id` for the refresh endpoint. Candidates tried and rejected:
@@ -113,4 +118,4 @@ To investigate: check the Granola desktop app bundle (`/Applications/Granola.app
 - `CLAUDE_MODEL` default is `bedrock.claude-sonnet-4-6` — the API key only allows Bedrock model IDs
 - `rclone/rclone.conf`, `.env`, `state/state.json`, `state/tokens.json` are never committed
 - No hardcoded paths in code — all configurable via env vars
-- Vault folder structure follows claude-obsidian conventions: `wiki/meetings/`, `wiki/concepts/` — do not invent new folders
+- Orchestrator outputs to `.raw/transcripts/` only — wiki pages are created by `claude-obsidian:wiki-ingest`, not the orchestrator

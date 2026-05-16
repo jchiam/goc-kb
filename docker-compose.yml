@@ -16,7 +16,6 @@ services:
       - CRON_SCHEDULE=${CRON_SCHEDULE:-0 * * * *}
       - VAULT_PATH=/vault
       - STATE_FILE=/state/state.json
-      - MEETINGS_FOLDER=${MEETINGS_FOLDER:-wiki/meetings}
       - RCLONE_DEST=${RCLONE_DEST}
       - LOOKBACK_DAYS=${LOOKBACK_DAYS:-30}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-bedrock.claude-sonnet-4-6}

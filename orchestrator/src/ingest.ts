@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import type { State, GranolaMeeting, PipelineOptions } from './types.js';
 import { listMeetings, getMeetingDetail } from './granola-client.js';
 import { processMeeting } from './process.js';
-import { writeMeetingNote } from './write.js';
+import { writeRawSource } from './write.js';
 import { syncVault } from './sync.js';
 import { scanFolder, markProcessed } from './folder-ingest.js';
 
@@ -68,13 +68,15 @@ export async function runPipeline(opts: PipelineOptions = {}): Promise<void> {
 
   console.log(`Processing ${meetings.length} meeting(s)`);
   const runAt = new Date().toISOString();
+  const writtenFiles: string[] = [];
 
   for (const meeting of meetings) {
     console.log(`→ ${meeting.title} (${meeting.id})`);
     try {
       const detail = await getMeetingDetail(meeting);
       const processed = await processMeeting(detail);
-      writeMeetingNote(processed, dryRun);
+      const written = writeRawSource(processed, dryRun);
+      if (written) writtenFiles.push(written);
 
       if (!dryRun) {
         if (!state.processedIds.includes(meeting.id)) {
@@ -101,6 +103,11 @@ export async function runPipeline(opts: PipelineOptions = {}): Promise<void> {
     }
   }
 
+  if (writtenFiles.length > 0) {
+    console.log(`\nWrote ${writtenFiles.length} raw source file(s):`);
+    for (const f of writtenFiles) console.log(`  ${f}`);
+  }
+
   syncVault(dryRun);
 }
 
@@ -116,7 +123,7 @@ async function runFolderMode(dryRun: boolean): Promise<void> {
     console.log(`→ ${detail.title} (${detail.id})`);
     try {
       const processed = await processMeeting(detail);
-      writeMeetingNote(processed, dryRun);
+      writeRawSource(processed, dryRun);
       if (!dryRun) {
         const filename = detail.id.replace(/^file-/, '') + '.md';
         markProcessed(WATCH_FOLDER!, filename);

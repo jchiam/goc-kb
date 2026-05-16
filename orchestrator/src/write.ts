@@ -1,9 +1,9 @@
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProcessedMeeting } from './types.js';
 
 const VAULT_PATH = process.env.VAULT_PATH ?? process.env.OBSIDIAN_VAULT_PATH ?? '/vault';
-const MEETINGS_FOLDER = process.env.MEETINGS_FOLDER ?? 'wiki/meetings';
+const RAW_TRANSCRIPTS_DIR = '.raw/transcripts';
 
 function slugify(text: string): string {
   return text
@@ -15,59 +15,110 @@ function slugify(text: string): string {
     .slice(0, 60);
 }
 
-function logDiff(path: string, existing: string, updated: string): void {
-  const oldLines = existing.split('\n').length;
-  const newLines = updated.split('\n').length;
-  console.log(`Updating: ${path} (${oldLines} → ${newLines} lines)`);
-  const oldHeaders: string[] = existing.match(/^## .+$/gm) ?? [];
-  const newHeaders: string[] = updated.match(/^## .+$/gm) ?? [];
-  const added = newHeaders.filter((h) => !oldHeaders.includes(h));
-  const removed = oldHeaders.filter((h) => !newHeaders.includes(h));
-  if (added.length) console.log(`  + sections: ${added.join(', ')}`);
-  if (removed.length) console.log(`  - sections: ${removed.join(', ')}`);
+interface Frontmatter {
+  meta: Record<string, unknown>;
+  body: string;
 }
 
-export function writeMeetingNote(processed: ProcessedMeeting, dryRun = false): void {
+function parseFrontmatter(markdown: string): Frontmatter {
+  const match = markdown.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) return { meta: {}, body: markdown };
+
+  const meta: Record<string, unknown> = {};
+  const lines = match[1].split('\n');
+  let currentKey = '';
+
+  for (const line of lines) {
+    const scalarMatch = line.match(/^(\w[\w_]*):\s*(.+)$/);
+    if (scalarMatch) {
+      currentKey = scalarMatch[1];
+      meta[currentKey] = scalarMatch[2].replace(/^["']|["']$/g, '');
+      continue;
+    }
+    const arrayKeyMatch = line.match(/^(\w[\w_]*):\s*$/);
+    if (arrayKeyMatch) {
+      currentKey = arrayKeyMatch[1];
+      meta[currentKey] = [];
+      continue;
+    }
+    const itemMatch = line.match(/^\s+-\s+(.+)$/);
+    if (itemMatch && currentKey && Array.isArray(meta[currentKey])) {
+      (meta[currentKey] as string[]).push(itemMatch[1]);
+    }
+  }
+
+  return { meta, body: match[2].trim() };
+}
+
+function serializeFrontmatter(obj: Record<string, unknown>): string {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (Array.isArray(value)) {
+      lines.push(`${key}:`);
+      for (const item of value) {
+        lines.push(`  - ${item}`);
+      }
+    } else if (typeof value === 'string' && (value.includes(':') || value.includes('"') || value.includes("'"))) {
+      lines.push(`${key}: "${value.replace(/"/g, '\\"')}"`);
+    } else {
+      lines.push(`${key}: ${value}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+export function writeRawSource(processed: ProcessedMeeting, dryRun = false): string | null {
   const { meeting, meetingNote, conceptNotes } = processed;
   const date = meeting.createdAt.split('T')[0];
   const slug = slugify(meeting.title);
   const filename = `${date}-${slug}.md`;
-  const meetingsDir = join(VAULT_PATH, MEETINGS_FOLDER);
-  const filePath = join(meetingsDir, filename);
+  const dir = join(VAULT_PATH, RAW_TRANSCRIPTS_DIR);
+  const filePath = join(dir, filename);
 
   if (dryRun) {
-    console.log(`[dry-run] Would write: ${filePath}`);
-    for (const c of conceptNotes) {
-      console.log(`[dry-run] Would write concept: wiki/concepts/${c.slug}.md`);
+    console.log(`[dry-run] Would write raw source: ${filePath}`);
+    if (conceptNotes.length > 0) {
+      console.log(`[dry-run]   with ${conceptNotes.length} extracted concept(s)`);
     }
-    return;
+    return null;
   }
-
-  mkdirSync(meetingsDir, { recursive: true });
 
   if (existsSync(filePath)) {
-    const existing = readFileSync(filePath, 'utf-8');
-    if (existing === meetingNote) {
-      console.log(`Unchanged: ${filePath}`);
-      return;
-    }
-    logDiff(filePath, existing, meetingNote);
+    console.log(`Already exists: ${filePath}`);
+    return null;
   }
 
-  writeFileSync(filePath, meetingNote, 'utf-8');
-  console.log(`Written: ${filePath}`);
+  const { meta, body } = parseFrontmatter(meetingNote);
 
-  const conceptsDir = join(VAULT_PATH, 'wiki', 'concepts');
-  mkdirSync(conceptsDir, { recursive: true });
+  const sourceMeta: Record<string, unknown> = {
+    title: `"${String(meeting.title).replace(/"/g, '\\"')}"`,
+    date: (meta.date as string) ?? date,
+    source: 'granola',
+    granola_id: `"${meeting.id}"`,
+    attendees: (meta.attendees as string[]) ?? [],
+    tags: (meta.tags as string[]) ?? ['meeting'],
+    type: 'meeting-transcript',
+  };
 
-  for (const concept of conceptNotes) {
-    const conceptPath = join(conceptsDir, `${concept.slug}.md`);
-    if (existsSync(conceptPath)) {
-      const existing = readFileSync(conceptPath, 'utf-8');
-      if (existing === concept.content) continue;
-      logDiff(conceptPath, existing, concept.content);
-    }
-    writeFileSync(conceptPath, concept.content, 'utf-8');
-    console.log(`Written concept: ${concept.slug}`);
+  const parts: string[] = [
+    `---\n${serializeFrontmatter(sourceMeta)}\n---\n`,
+    body,
+  ];
+
+  if (conceptNotes.length > 0) {
+    const conceptSections = conceptNotes.map((c) => {
+      const { body: conceptBody } = parseFrontmatter(c.content);
+      const stripped = conceptBody.replace(/^#\s+.+\n*/, '');
+      return `### ${c.title}\n\n${stripped.trim()}`;
+    });
+    parts.push('---\n\n## Extracted Concepts\n');
+    parts.push(conceptSections.join('\n\n'));
   }
+
+  const content = parts.join('\n\n') + '\n';
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(filePath, content, 'utf-8');
+  console.log(`Written raw source: ${filePath}`);
+  return filePath;
 }
