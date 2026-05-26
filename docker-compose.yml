@@ -4,9 +4,10 @@ services:
     volumes:
       - "${OBSIDIAN_VAULT_PATH}:/vault"
       - "./state:/state"
-      - "${RCLONE_CONFIG:-~/.config/rclone/rclone.conf}:/root/.config/rclone/rclone.conf:ro"
+      - "${RCLONE_CONFIG_DIR:-~/.config/rclone}:/tmp/rclone:rw"
     environment:
       - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - RCLONE_CONFIG=/tmp/rclone/rclone.conf
       - GRANOLA_API_KEY=${GRANOLA_API_KEY}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
