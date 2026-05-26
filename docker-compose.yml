@@ -3,14 +3,10 @@ services:
     build: ./orchestrator
     volumes:
       - "${OBSIDIAN_VAULT_PATH}:/vault"
-      - "${GRANOLA_AUTH_PATH:-~/Library/Application Support/Granola/stored-accounts.json}:/root/.config/granola/stored-accounts.json:ro"
-      - "${GRANOLA_SUPABASE_PATH}:/root/.config/granola/supabase.json:ro"
       - "./state:/state"
       - "${RCLONE_CONFIG:-~/.config/rclone/rclone.conf}:/root/.config/rclone/rclone.conf:ro"
     environment:
-      - NODE_TLS_REJECT_UNAUTHORIZED=0
-      - GRANOLA_AUTH_PATH=/root/.config/granola/stored-accounts.json
-      - GRANOLA_SUPABASE_PATH=/root/.config/granola/supabase.json
+      - GRANOLA_API_KEY=${GRANOLA_API_KEY}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - CRON_SCHEDULE=${CRON_SCHEDULE:-0 * * * *}

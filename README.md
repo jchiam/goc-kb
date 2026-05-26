@@ -9,7 +9,7 @@ Your native Obsidian app reads the same vault directory the whole time. The cont
 ## How it works
 
 ```
-Granola API (direct HTTP via granola-client.ts)
+Granola Public API (API key auth)
     │
     ▼
 Orchestrator (TypeScript)
@@ -35,7 +35,7 @@ For each new meeting, Claude produces:
 | Requirement | Notes |
 |---|---|
 | Docker Desktop | [Install](https://docs.docker.com/desktop/mac/) |
-| Granola (macOS app) | Must be installed and signed in |
+| Granola (macOS app) | Must be installed and signed in; generate API key in Settings → API |
 | Obsidian vault | Existing vault with [claude-obsidian](https://github.com/AgriciDaniel/claude-obsidian) default structure |
 | Anthropic API key | [console.anthropic.com](https://console.anthropic.com) |
 | rclone | `brew install rclone` |
@@ -62,10 +62,8 @@ ANTHROPIC_BASE_URL=
 # Claude model (defaults to bedrock.claude-sonnet-4-6 if not set)
 CLAUDE_MODEL=bedrock.claude-sonnet-4-6
 
-# Granola auth — stored-accounts.json is preferred (desktop app keeps it fresh)
-GRANOLA_AUTH_PATH=~/Library/Application Support/Granola/stored-accounts.json
-# Fallback: supabase.json (older format, less reliably refreshed)
-GRANOLA_SUPABASE_PATH=~/Library/Application Support/Granola/supabase.json
+# Granola API key (generate in Granola desktop: Settings → API)
+GRANOLA_API_KEY=grn_...
 
 # Absolute path to your Obsidian vault root
 OBSIDIAN_VAULT_PATH=~/Obsidian Vault
@@ -136,8 +134,7 @@ The first run processes all meetings from the lookback window (default 30 days).
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
 | `ANTHROPIC_BASE_URL` | No | — | Custom base URL for local Claude or proxy |
 | `CLAUDE_MODEL` | No | `bedrock.claude-sonnet-4-6` | Claude model ID |
-| `GRANOLA_AUTH_PATH` | No | `~/Library/Application Support/Granola/stored-accounts.json` | Primary auth source (desktop app managed) |
-| `GRANOLA_SUPABASE_PATH` | No | `~/Library/Application Support/Granola/supabase.json` | Fallback auth file |
+| `GRANOLA_API_KEY` | Yes | — | Granola API key (`grn_...`), generated in Settings → API |
 | `OBSIDIAN_VAULT_PATH` | Yes | — | Absolute path to vault root on host |
 | `RCLONE_DEST` | Yes | — | `remote:path` for rclone sync target |
 | `CRON_SCHEDULE` | No | `0 * * * *` | Cron expression for pipeline frequency |
@@ -222,10 +219,10 @@ All state lives in mounted volumes or `.env`:
 |---|---|
 | Processed meeting IDs + update metadata | `state/state.json` |
 | rclone credentials | `rclone/rclone.conf` (symlink to `~/.config/rclone/rclone.conf`) |
-| Granola auth tokens | `~/Library/Application Support/Granola/stored-accounts.json` (host, read-only mount) |
+| Granola API key | `.env` (`GRANOLA_API_KEY`) |
 | Pipeline config | `.env` |
 
-Moving to a new machine: clone the repo, copy `.env`, symlink `rclone/rclone.conf`, install Granola and sign in (creates `stored-accounts.json`), `docker compose up -d`.
+Moving to a new machine: clone the repo, copy `.env` (with your API key), symlink `rclone/rclone.conf`, `docker compose up -d`.
 
 ---
 
@@ -236,7 +233,7 @@ Moving to a new machine: clone the repo, copy `.env`, symlink `rclone/rclone.con
 To set up on a second machine without reprocessing already-written meetings:
 
 1. Clone the repo and copy `.env` and `rclone/rclone.conf` from the first machine.
-2. Install Granola and sign in (creates `supabase.json`).
+2. Ensure `GRANOLA_API_KEY` in `.env` is valid (same key works on any machine).
 3. Pull the vault from Google Drive before first run:
 
 ```bash
@@ -252,10 +249,10 @@ Replace `gdrive:"Granola Notes"` with your `RCLONE_DEST` value from `.env`.
 ## Troubleshooting
 
 **No meetings appearing**
-Check that Granola desktop is signed in (creates `supabase.json`). Check `state/state.json` — delete it to reprocess from scratch.
+Verify your API key is valid: `curl -H "Authorization: Bearer $GRANOLA_API_KEY" https://public-api.granola.ai/v1/notes?page_size=1`. Check `state/state.json` — delete it to reprocess from scratch.
 
-**Auth token expired (401 or "Token refresh failed")**
-Open Granola desktop app (refreshes `stored-accounts.json`). The pipeline auto-detects the fresher token on next run. Falls back to `supabase.json` if `stored-accounts.json` is unavailable.
+**Auth error (401)**
+API key was revoked or invalid. Generate a new one in Granola desktop: Settings → API. Update `GRANOLA_API_KEY` in `.env` and restart.
 
 **rclone sync failing**
 Run `rclone lsd gdrive:` on the host to confirm the remote is reachable. If token expired, run `rclone config` to re-auth — the symlink ensures the container picks up the new credentials on restart.
