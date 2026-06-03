@@ -19,8 +19,9 @@ goc-kb/
 │   │   ├── index.ts      # cron entry point; runs pipeline immediately then on schedule
 │   │   ├── granola-client.ts  # Granola public API client (API key auth)
 │   │   ├── ingest.ts     # pipeline orchestration, state tracking
-│   │   ├── process.ts    # Claude API call; returns meetingNote + conceptNotes JSON
+│   │   ├── process.ts    # Claude API call; returns meetingNote + conceptNotes + entities JSON
 │   │   ├── write.ts      # writes enriched source files to .raw/transcripts/
+│   │   ├── wiki-ingest.ts # creates wiki pages inline from processed data
 │   │   ├── sync.ts       # rclone sync vault → RCLONE_DEST
 │   │   └── types.ts      # shared interfaces
 │   ├── prompts/
@@ -80,7 +81,7 @@ npm run build            # tsc compile to dist/
 
 **Raw source writes** (`write.ts`): Enriched meeting notes → `$VAULT_PATH/.raw/transcripts/<date>-<slug>.md`. Each file contains merged frontmatter (title, date, granola_id, attendees, tags, type: meeting-transcript), the enriched meeting body, and extracted concepts as appendix sections. Skipped if file already exists. `VAULT_PATH` resolves: `VAULT_PATH` env → `OBSIDIAN_VAULT_PATH` env → `/vault`.
 
-**Wiki-ingest integration**: The orchestrator writes to `.raw/transcripts/` only. The `claude-obsidian:wiki-ingest` skill processes these source files into full wiki pages (`wiki/sources/`, `wiki/entities/`, `wiki/concepts/`), updates `index.md`, `log.md`, `hot.md`, and handles cross-referencing. Trigger wiki-ingest manually after orchestrator runs, or set up a durable Claude Code cron (7-day auto-expiry).
+**Wiki-ingest** (`wiki-ingest.ts`): Runs inline after `write.ts`. Creates wiki pages from the structured data already extracted by `process.ts` — source summary (`wiki/sources/`), entity pages (`wiki/entities/`), concept pages (`wiki/concepts/`). Updates `wiki/index.md`, `wiki/log.md`, `wiki/hot.md`, and `.raw/.manifest.json`. Non-blocking — failures don't stop the pipeline. Idempotent — skips pages that already exist, checks manifest hash to avoid re-ingesting unchanged sources. If DragonScale is active (`.vault-meta/` + `scripts/allocate-address.sh` exist), assigns stable addresses to new pages.
 
 **rclone sync** (`sync.ts`): Runs after all meetings in a batch are written. Skipped if `RCLONE_DEST` unset or dry-run. Syncs `VAULT_PATH` only — `state.json` is not synced.
 
@@ -92,13 +93,10 @@ npm run build            # tsc compile to dist/
 
 If the API returns 401, the key was likely revoked. Generate a new one: Granola desktop → Settings → API → Create key. Update `GRANOLA_API_KEY` in `.env` and restart container.
 
-### Wiki-ingest cron (re-setup every 7 days)
-
-A durable Claude Code cron checks `.raw/transcripts/` hourly at :17 for new files and runs `claude-obsidian:wiki-ingest` on them. The cron is self-renewing — it reads `.claude/scheduled_tasks.json` each firing and re-creates itself before the 7-day auto-expiry. If it somehow lapses, ask Claude Code: "Set up the wiki-ingest cron again."
 
 ## Constraints
 
 - `CLAUDE_MODEL` default is `bedrock.claude-sonnet-4-6` — the API key only allows Bedrock model IDs
 - `rclone/rclone.conf`, `.env`, `state/state.json` are never committed
 - No hardcoded paths in code — all configurable via env vars
-- Orchestrator outputs to `.raw/transcripts/` only — wiki pages are created by `claude-obsidian:wiki-ingest`, not the orchestrator
+- Orchestrator creates wiki pages inline via `wiki-ingest.ts` — no external Claude Code session needed

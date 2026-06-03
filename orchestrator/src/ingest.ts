@@ -3,6 +3,7 @@ import type { State, GranolaMeeting, PipelineOptions } from './types.js';
 import { listMeetings, getMeetingDetail } from './granola-client.js';
 import { processMeeting } from './process.js';
 import { writeRawSource } from './write.js';
+import { wikiIngest } from './wiki-ingest.js';
 import { syncVault } from './sync.js';
 import { scanFolder, markProcessed } from './folder-ingest.js';
 
@@ -78,6 +79,15 @@ export async function runPipeline(opts: PipelineOptions = {}): Promise<void> {
       const written = writeRawSource(processed, dryRun);
       if (written) writtenFiles.push(written);
 
+      try {
+        const ingestResult = wikiIngest(processed, { dryRun });
+        if (!ingestResult.skipped) {
+          console.log(`  Wiki: ${ingestResult.pagesCreated.length} created, ${ingestResult.pagesUpdated.length} updated`);
+        }
+      } catch (err) {
+        console.error(`  Wiki-ingest failed (non-blocking):`, err);
+      }
+
       if (!dryRun) {
         if (!state.processedIds.includes(meeting.id)) {
           state.processedIds.push(meeting.id);
@@ -124,6 +134,14 @@ async function runFolderMode(dryRun: boolean): Promise<void> {
     try {
       const processed = await processMeeting(detail);
       writeRawSource(processed, dryRun);
+      try {
+        const ingestResult = wikiIngest(processed, { dryRun });
+        if (!ingestResult.skipped) {
+          console.log(`  Wiki: ${ingestResult.pagesCreated.length} created, ${ingestResult.pagesUpdated.length} updated`);
+        }
+      } catch (err) {
+        console.error(`  Wiki-ingest failed (non-blocking):`, err);
+      }
       if (!dryRun) {
         const filename = detail.id.replace(/^file-/, '') + '.md';
         markProcessed(WATCH_FOLDER!, filename);

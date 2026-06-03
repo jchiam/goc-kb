@@ -10,6 +10,15 @@ Return ONLY valid JSON — no prose, no markdown fences, no explanation. The JSO
       "title": "Human Readable Title",
       "content": "<complete markdown string for the concept page>"
     }
+  ],
+  "entities": [
+    {
+      "slug": "firstname-lastname",
+      "name": "First Last",
+      "entity_type": "person",
+      "role": "Their role/title if identifiable",
+      "description": "One-paragraph description based on meeting context"
+    }
   ]
 }
 
@@ -62,12 +71,13 @@ Rules for meeting notes:
 
 ## Concept notes
 
-Extract 2–5 topics, projects, or people that recur across the discussion and merit their own wiki pages. Skip generic terms. Good candidates:
+Extract 2–5 topics, projects, or systems that recur across the discussion and merit their own wiki pages. Skip generic terms. Good candidates:
 
 - Named projects or products
 - Technical systems or tools discussed in depth
-- People who appear as significant participants or stakeholders (slug: firstname-lastname)
-- Recurring strategic themes
+- Recurring strategic themes or frameworks
+
+Do NOT include people or organisations here — those go in `entities`.
 
 Each concept note `content` must be complete Obsidian-flavored markdown:
 
@@ -87,6 +97,24 @@ One-paragraph description of this topic based on what was discussed in the meeti
 
 Rules for concept notes:
 - Do not create a concept note for a topic that gets only passing mention
-- People concept notes: use full name as title, firstname-lastname as slug
 - Keep content factual — only what is evidenced in the meeting data
 - The `Mentioned In` section links back to the meeting note that generated this concept page
+
+---
+
+## Entities
+
+Extract people, organisations, and products that appear as significant participants or stakeholders. Do NOT include entities that get only passing mention.
+
+Each entity must have:
+- `slug`: kebab-case identifier (firstname-lastname for people, org-name for orgs)
+- `name`: display name
+- `entity_type`: one of `person`, `organization`, `product`, `repository`
+- `role`: their role/title if identifiable from context (optional, omit if unknown)
+- `description`: one paragraph based on what was discussed about them in this meeting
+
+Rules for entities:
+- Only include entities discussed substantively (mentioned in decisions, action items, or as key stakeholders)
+- For people: use full name as title, firstname-lastname as slug
+- For organisations: use official name, kebab-case slug
+- Keep descriptions factual — only what is evidenced in the meeting data

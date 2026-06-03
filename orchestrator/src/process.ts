@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { MeetingDetail, ProcessedMeeting, ConceptNote } from './types.js';
+import type { MeetingDetail, ProcessedMeeting, ConceptNote, Entity } from './types.js';
 
 const client = new Anthropic();
 const MODEL = process.env.CLAUDE_MODEL ?? 'bedrock.claude-sonnet-4-6';
@@ -37,6 +37,7 @@ function formatInput(meeting: MeetingDetail): string {
 interface LLMOutput {
   meetingNote: string;
   conceptNotes: ConceptNote[];
+  entities: Entity[];
 }
 
 function parseResponse(text: string): LLMOutput {
@@ -56,6 +57,7 @@ function parseResponse(text: string): LLMOutput {
 
   if (typeof parsed.meetingNote !== 'string') throw new Error('Response missing meetingNote');
   if (!Array.isArray(parsed.conceptNotes)) throw new Error('Response missing conceptNotes');
+  if (!Array.isArray(parsed.entities)) parsed.entities = [];
 
   return parsed;
 }
@@ -63,7 +65,7 @@ function parseResponse(text: string): LLMOutput {
 export async function processMeeting(meeting: MeetingDetail): Promise<ProcessedMeeting> {
   const response = await client.messages.create({
     model: MODEL,
-    max_tokens: 8096,
+    max_tokens: 12000,
     system: [
       {
         type: 'text',
@@ -88,5 +90,6 @@ export async function processMeeting(meeting: MeetingDetail): Promise<ProcessedM
     meeting,
     meetingNote: output.meetingNote,
     conceptNotes: output.conceptNotes,
+    entities: output.entities,
   };
 }

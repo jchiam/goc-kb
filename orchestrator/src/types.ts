@@ -26,10 +26,19 @@ export interface ConceptNote {
   content: string;
 }
 
+export interface Entity {
+  slug: string;
+  name: string;
+  entity_type: 'person' | 'organization' | 'product' | 'repository';
+  role?: string;
+  description: string;
+}
+
 export interface ProcessedMeeting {
   meeting: MeetingDetail;
   meetingNote: string;
   conceptNotes: ConceptNote[];
+  entities: Entity[];
 }
 
 export interface PipelineOptions {
