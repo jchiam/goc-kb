@@ -73,7 +73,7 @@ function allocateAddress(): string | null {
 }
 
 function ensureDirs(): void {
-  const dirs = ['wiki/sources', 'wiki/entities', 'wiki/concepts'];
+  const dirs = ['wiki/sources', 'wiki/entities', 'wiki/concepts', 'wiki/meetings'];
   for (const dir of dirs) {
     mkdirSync(join(VAULT_PATH, dir), { recursive: true });
   }
@@ -85,6 +85,78 @@ function writePage(relPath: string, content: string): boolean {
   mkdirSync(join(VAULT_PATH, relPath, '..'), { recursive: true });
   writeFileSync(absPath, content, 'utf-8');
   return true;
+}
+
+function parseMeetingNoteFrontmatter(meetingNote: string): { meta: Record<string, unknown>; body: string } {
+  const match = meetingNote.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) return { meta: {}, body: meetingNote };
+
+  const meta: Record<string, unknown> = {};
+  const lines = match[1].split('\n');
+  let currentKey = '';
+
+  for (const line of lines) {
+    const scalarMatch = line.match(/^(\w[\w_]*):\s*(.+)$/);
+    if (scalarMatch) {
+      currentKey = scalarMatch[1];
+      meta[currentKey] = scalarMatch[2].replace(/^["']|["']$/g, '');
+      continue;
+    }
+    const arrayKeyMatch = line.match(/^(\w[\w_]*):\s*$/);
+    if (arrayKeyMatch) {
+      currentKey = arrayKeyMatch[1];
+      meta[currentKey] = [];
+      continue;
+    }
+    const itemMatch = line.match(/^\s+-\s+(.+)$/);
+    if (itemMatch && currentKey && Array.isArray(meta[currentKey])) {
+      (meta[currentKey] as string[]).push(itemMatch[1]);
+    }
+  }
+
+  return { meta, body: match[2].trim() };
+}
+
+function buildMeetingPage(processed: ProcessedMeeting, rawRelPath: string): string {
+  const { meeting, meetingNote, conceptNotes, entities } = processed;
+  const { meta, body } = parseMeetingNoteFrontmatter(meetingNote);
+  const date = meeting.createdAt.split('T')[0];
+  const address = allocateAddress();
+
+  const attendees = (meta.attendees as string[]) ?? [];
+  const tags = (meta.tags as string[]) ?? ['meeting'];
+
+  const fm = [
+    '---',
+    'type: meeting',
+    'status: seed',
+    `created: ${today()}`,
+    `updated: ${today()}`,
+    `date: ${date}`,
+  ];
+  if (attendees.length > 0) {
+    fm.push('attendees:');
+    for (const a of attendees) fm.push(`  - ${a}`);
+  }
+  fm.push('tags:');
+  for (const t of tags) fm.push(`  - ${t}`);
+  fm.push('source: granola');
+  fm.push(`granola_id: ${meeting.id}`);
+  if (address) fm.push(`address: ${address}`);
+  fm.push('---');
+
+  const related = [
+    ...conceptNotes.map((c) => `- [[${c.slug}]]`),
+    ...entities.map((e) => `- [[${e.slug}]]`),
+  ];
+
+  const parts = [fm.join('\n'), '', body];
+  if (related.length > 0) {
+    parts.push('', '## Related', '', ...related);
+  }
+  parts.push('');
+
+  return parts.join('\n');
 }
 
 function buildSourcePage(processed: ProcessedMeeting, rawRelPath: string): string {
@@ -239,7 +311,7 @@ function appendToEntityPage(entityPath: string, rawRelPath: string): boolean {
 function updateIndex(pagesCreated: string[]): void {
   const indexPath = join(VAULT_PATH, 'wiki/index.md');
   if (!existsSync(indexPath)) {
-    const seed = '---\ntype: meta\ntitle: Index\n---\n\n# Wiki Index\n\n## Sources\n\n## Entities\n\n## Concepts\n';
+    const seed = '---\ntype: meta\ntitle: Index\n---\n\n# Wiki Index\n\n## Meetings\n\n## Sources\n\n## Entities\n\n## Concepts\n';
     writeFileSync(indexPath, seed, 'utf-8');
   }
 
@@ -250,7 +322,8 @@ function updateIndex(pagesCreated: string[]): void {
     if (content.includes(link)) continue;
 
     let section = '## Sources';
-    if (page.includes('entities/')) section = '## Entities';
+    if (page.includes('meetings/')) section = '## Meetings';
+    else if (page.includes('entities/')) section = '## Entities';
     else if (page.includes('concepts/')) section = '## Concepts';
 
     const sectionIdx = content.indexOf(section);
@@ -371,6 +444,13 @@ export function wikiIngest(
   }
 
   ensureDirs();
+
+  // Meeting page
+  const meetingSlug = `${date}-${slug}`;
+  const meetingPath = `wiki/meetings/${meetingSlug}.md`;
+  if (writePage(meetingPath, buildMeetingPage(processed, rawRelPath))) {
+    result.pagesCreated.push(meetingPath);
+  }
 
   // Source page
   const sourceSlug = `${date}-${slug}`;
