@@ -4,6 +4,7 @@ import { listMeetings, getMeetingDetail } from './granola-client.js';
 import { processMeeting } from './process.js';
 import { writeRawSource } from './write.js';
 import { wikiIngest } from './wiki-ingest.js';
+import { runCatchup } from './catchup.js';
 import { syncVault } from './sync.js';
 import { scanFolder, markProcessed } from './folder-ingest.js';
 
@@ -118,6 +119,7 @@ export async function runPipeline(opts: PipelineOptions = {}): Promise<void> {
     for (const f of writtenFiles) console.log(`  ${f}`);
   }
 
+  runCatchup(dryRun);
   syncVault(dryRun);
 }
 
@@ -151,5 +153,6 @@ async function runFolderMode(dryRun: boolean): Promise<void> {
     }
   }
 
+  runCatchup(dryRun);
   syncVault(dryRun);
 }
