@@ -4,13 +4,11 @@ dist/
 
 # Secrets and credentials
 .env
-rclone/rclone.conf
 
-# Runtime state
-state/state.json
-state/tokens.json
+# Logs
 *.log
 
-# Claude Code — allow project permissions, ignore everything else
+# Claude Code — allow project settings and skills
 .claude/*
 !.claude/settings.json
+!.claude/skills/

@@ -1,14 +1,19 @@
 {
+  "name": "goc-kb",
+  "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "docker:build": "cross-env BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose build",
-    "docker:up": "cross-env BUILDX_NO_DEFAULT_ATTESTATIONS=1 docker compose up -d --build",
-    "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f --tail 50 | while IFS= read -r line; do printf '%s %s\\n' \"$(TZ=Asia/Singapore date '+%H:%M:%S')\" \"$line\"; done"
+    "build": "tsc",
+    "inbox": "tsx --env-file .env src/inbox.ts",
+    "ingest": "tsx --env-file .env src/ingest-single.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
-    "@types/node-cron": "^3.0.11",
-    "cross-env": "^7.0.3"
+    "@types/node": "^24.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
   }
 }

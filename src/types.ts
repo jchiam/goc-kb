@@ -1,9 +1,3 @@
-export interface State {
-  lastProcessedAt: string;
-  processedIds: string[];
-  processedMeta?: Record<string, { updatedAt: string }>;
-}
-
 export interface GranolaMeeting {
   id: string;
   title: string;
@@ -41,7 +35,3 @@ export interface ProcessedMeeting {
   entities: Entity[];
 }
 
-export interface PipelineOptions {
-  meetingId?: string;
-  dryRun?: boolean;
-}
