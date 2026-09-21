@@ -19,6 +19,7 @@ goc-kb/
 │   ├── process.ts        # Claude API call; extracts entities + concepts
 │   ├── write.ts          # writes verbatim Granola source files to .raw/transcripts/
 │   ├── wiki-ingest.ts    # creates wiki pages from processed data
+│   ├── vault.ts          # existing-page roster + entity path resolution
 │   ├── state.ts          # state load/save (stored in vault)
 │   └── types.ts          # shared interfaces
 ├── prompts/
@@ -76,7 +77,11 @@ npm run build                            # tsc compile to dist/
 
 **Claude call** (`process.ts`): Single `messages.create` call per meeting. System prompt (`meeting-note.md`) is cached via `cache_control: ephemeral`. Response must be JSON `{ meetingNote, conceptNotes[], entities[] }`.
 
-**Wiki-ingest** (`wiki-ingest.ts`): Creates wiki pages from structured data — meeting page (`wiki/meetings/`), source page (`wiki/sources/`), entity pages (`wiki/entities/`), concept pages (`wiki/concepts/`). Updates `wiki/index.md`, `wiki/log.md`, `wiki/hot.md`. Idempotent — skips existing pages, checks manifest hash.
+**Wiki-ingest** (`wiki-ingest.ts`): Creates wiki pages from structured data — meeting page (`wiki/meetings/`), source page (`wiki/sources/`), entity pages (`wiki/entities/{people,orgs,products,repos}/`), concept pages (`wiki/concepts/`). Updates `wiki/index.md`, `wiki/log.md`, `wiki/hot.md`. Idempotent — checks manifest hash.
+
+**Entity/concept resolution**: `process.ts` sends the LLM the vault's existing entity and concept rosters (`vault.ts`) so it reuses canonical slugs (e.g. "Jarrett" → `jarrett-yeap`). `wiki-ingest.ts` then resolves each slug across all entity sub-folders: existing pages get an `## Update (date)` section + Mentioned In link; first-name-only person slugs with no match are never created and are reported in `unresolved`. Links to pages that neither exist nor are being created are rewritten as plain text. Mentioned In links point at the meeting page slug.
+
+**Addresses**: uses the vault's `scripts/allocate-address.sh` when `flock` exists; otherwise (macOS) increments `.vault-meta/address-counter.txt` directly.
 
 **Prompt files**: Edit `orchestrator/prompts/meeting-note.md` to tune output format.
 

@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { MeetingDetail, ProcessedMeeting, ConceptNote, Entity } from './types.js';
+import { conceptRoster, entityRoster } from './vault.js';
 
 const client = new Anthropic();
 const MODEL = process.env.CLAUDE_MODEL ?? 'bedrock.claude-sonnet-4-6';
@@ -33,6 +34,16 @@ function formatInput(meeting: MeetingDetail): string {
 
   if (meeting.transcript.trim()) {
     parts.push(`\n## Transcript\n${meeting.transcript}`);
+  }
+
+  const entities = entityRoster();
+  if (entities.length > 0) {
+    parts.push(`\n## Existing entity pages (slug | title | path)\n${entities.map((p) => `${p.slug} | ${p.title} | ${p.path}`).join('\n')}`);
+  }
+
+  const concepts = conceptRoster();
+  if (concepts.length > 0) {
+    parts.push(`\n## Existing concept pages (slug | title)\n${concepts.map((p) => `${p.slug} | ${p.title}`).join('\n')}`);
   }
 
   return parts.join('\n');

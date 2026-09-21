@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import type { ProcessedMeeting, Entity, ConceptNote } from './types.js';
+import { allWikiSlugs, conceptRoster, findEntityPath, isFirstNameOnly, newEntityPath } from './vault.js';
 
 const VAULT_PATH = process.env.VAULT_PATH ?? process.env.OBSIDIAN_VAULT_PATH ?? '/vault';
 
@@ -10,6 +11,8 @@ export interface IngestResult {
   sourcePath: string;
   pagesCreated: string[];
   pagesUpdated: string[];
+  /** People the LLM could only name by first name and no existing page matched; left as plain text */
+  unresolved: string[];
   skipped: boolean;
 }
 
@@ -64,13 +67,51 @@ function hasDragonScale(): boolean {
   );
 }
 
+let flockAvailable: boolean | undefined;
+
+function hasFlock(): boolean {
+  if (flockAvailable === undefined) {
+    try {
+      execSync('command -v flock', { stdio: 'ignore' });
+      flockAvailable = true;
+    } catch {
+      flockAvailable = false;
+    }
+  }
+  return flockAvailable;
+}
+
 function allocateAddress(): string | null {
   if (!hasDragonScale()) return null;
-  try {
-    return execSync('./scripts/allocate-address.sh', { cwd: VAULT_PATH, encoding: 'utf-8' }).trim();
-  } catch {
-    return null;
+  if (hasFlock()) {
+    try {
+      return execSync('./scripts/allocate-address.sh', { cwd: VAULT_PATH, encoding: 'utf-8' }).trim();
+    } catch {
+      return null;
+    }
   }
+  // macOS ships without flock and the script would time out on every call. This CLI is the
+  // only writer while it runs, so bump the counter directly (same format as the script).
+  const counterPath = join(VAULT_PATH, '.vault-meta/address-counter.txt');
+  if (!existsSync(counterPath)) return null;
+  const current = parseInt(readFileSync(counterPath, 'utf-8').trim(), 10);
+  if (!Number.isInteger(current)) return null;
+  writeFileSync(counterPath, `${current + 1}\n`, 'utf-8');
+  return `c-${String(current).padStart(6, '0')}`;
+}
+
+/** Turn [[slug]] / [[slug|label]] links to pages that don't exist into plain text. */
+function unlinkUnknown(markdown: string, known: Set<string>): string {
+  return markdown.replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (link, target: string, label?: string) => {
+    const slug = target.trim();
+    if (known.has(slug) || slug.startsWith('.raw/')) return link;
+    return label ?? slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  });
+}
+
+/** Remove a `## Heading` section (heading through the line before the next `## `). */
+function stripSection(markdown: string, heading: string): string {
+  return markdown.replace(new RegExp(`^## ${heading}\\n[\\s\\S]*?(?=^## |(?![\\s\\S]))`, 'gm'), '');
 }
 
 function ensureDirs(): void {
@@ -118,9 +159,13 @@ function parseMeetingNoteFrontmatter(meetingNote: string): { meta: Record<string
   return { meta, body: match[2].trim() };
 }
 
-function buildMeetingPage(processed: ProcessedMeeting, rawRelPath: string): string {
+function buildMeetingPage(processed: ProcessedMeeting, known: Set<string>): string {
   const { meeting, meetingNote, conceptNotes, entities } = processed;
-  const { meta, body } = parseMeetingNoteFrontmatter(meetingNote);
+  const parsed = parseMeetingNoteFrontmatter(meetingNote);
+  const meta = parsed.meta;
+  // The LLM writes its own Related section; fold its links into the single one built below
+  const llmRelated = [...(parsed.body.match(/^## Related\n[\s\S]*?(?=^## |(?![\s\S]))/m)?.[0] ?? '').matchAll(/\[\[([^\]|]+)/g)].map((m) => m[1]);
+  const body = unlinkUnknown(stripSection(parsed.body, 'Related'), known).trim();
   const date = meeting.createdAt.split('T')[0];
   const address = allocateAddress();
 
@@ -146,10 +191,10 @@ function buildMeetingPage(processed: ProcessedMeeting, rawRelPath: string): stri
   if (address) fm.push(`address: ${address}`);
   fm.push('---');
 
-  const related = [
-    ...conceptNotes.map((c) => `- [[${c.slug}]]`),
-    ...entities.map((e) => `- [[${e.slug}]]`),
-  ];
+  const relatedSlugs = [
+    ...new Set([...conceptNotes.map((c) => c.slug), ...entities.map((e) => e.slug), ...llmRelated]),
+  ].filter((s) => known.has(s));
+  const related = relatedSlugs.map((s) => `- [[${s}]]`);
 
   const parts = [fm.join('\n'), '', body];
   if (related.length > 0) {
@@ -211,11 +256,12 @@ function buildSourcePage(processed: ProcessedMeeting, rawRelPath: string): strin
   return fm.join('\n') + '\n' + body.join('\n');
 }
 
-function buildEntityPage(entity: Entity, rawRelPath: string): string {
+function buildEntityPage(entity: Entity, meetingSlug: string): string {
   const address = allocateAddress();
   const fm = [
     '---',
-    'type: entity',
+    // Vault convention: people are `type: person`; orgs/products/repos are `type: entity`
+    `type: ${entity.entity_type === 'person' ? 'person' : 'entity'}`,
     `entity_type: ${entity.entity_type}`,
     `title: "${entity.name.replace(/"/g, '\\"')}"`,
   ];
@@ -228,7 +274,7 @@ function buildEntityPage(entity: Entity, rawRelPath: string): string {
   fm.push(`updated: ${today()}`);
   if (address) fm.push(`address: ${address}`);
   fm.push('sources:');
-  fm.push(`  - "[[${rawRelPath}]]"`);
+  fm.push(`  - "[[${meetingSlug}]]"`);
   fm.push('---');
 
   const body = [
@@ -239,14 +285,21 @@ function buildEntityPage(entity: Entity, rawRelPath: string): string {
     '',
     '## Mentioned In',
     '',
-    `- [[${rawRelPath}]]`,
+    `- [[${meetingSlug}]]`,
     '',
   ];
 
   return fm.join('\n') + '\n' + body.join('\n');
 }
 
-function buildConceptPage(concept: ConceptNote, rawRelPath: string): string {
+/** LLM concept content minus frontmatter, any leading H1s, and any Mentioned In section. */
+function conceptBody(concept: ConceptNote): string {
+  return stripSection(concept.content.replace(/^---\n[\s\S]*?\n---\n?/, ''), 'Mentioned In')
+    .replace(/^(\s*#\s+.+\n+)+/, '')
+    .trim();
+}
+
+function buildConceptPage(concept: ConceptNote, meetingSlug: string): string {
   const address = allocateAddress();
   const fm = [
     '---',
@@ -260,52 +313,48 @@ function buildConceptPage(concept: ConceptNote, rawRelPath: string): string {
   ];
   if (address) fm.push(`address: ${address}`);
   fm.push('sources:');
-  fm.push(`  - "[[${rawRelPath}]]"`);
+  fm.push(`  - "[[${meetingSlug}]]"`);
   fm.push('---');
-
-  const contentBody = concept.content
-    .replace(/^---\n[\s\S]*?\n---\n?/, '')
-    .replace(/^#\s+.+\n*/, '')
-    .trim();
 
   const body = [
     '',
     `# ${concept.title}`,
     '',
-    contentBody,
+    conceptBody(concept),
     '',
     '## Mentioned In',
     '',
-    `- [[${rawRelPath}]]`,
+    `- [[${meetingSlug}]]`,
     '',
   ];
 
   return fm.join('\n') + '\n' + body.join('\n');
 }
 
-function appendToEntityPage(entityPath: string, rawRelPath: string): boolean {
-  const absPath = join(VAULT_PATH, entityPath);
+/**
+ * Add what this meeting says to an existing entity/concept page: an `## Update (date)`
+ * section before Mentioned In, plus a Mentioned In link to the meeting.
+ */
+function updateExistingPage(relPath: string, meetingSlug: string, update: string): boolean {
+  const absPath = join(VAULT_PATH, relPath);
   if (!existsSync(absPath)) return false;
   const content = readFileSync(absPath, 'utf-8');
-  const mentionLink = `- [[${rawRelPath}]]`;
+  const mentionLink = `- [[${meetingSlug}]]`;
   if (content.includes(mentionLink)) return false;
 
-  const updated = content.replace(
-    /(\n## Mentioned In\n)/,
-    `$1${mentionLink}\n`,
-  );
-  if (updated === content) {
-    writeFileSync(absPath, content + `\n## Mentioned In\n${mentionLink}\n`, 'utf-8');
+  const updateSection = update.trim() ? `## Update (${today()})\n\n${update.trim()}\n\n` : '';
+  const mentionIdx = content.search(/^## Mentioned In\n/m);
+  let updated: string;
+  if (mentionIdx === -1) {
+    updated = `${content.trimEnd()}\n\n${updateSection}## Mentioned In\n\n${mentionLink}\n`;
   } else {
-    writeFileSync(absPath, updated, 'utf-8');
+    const before = content.slice(0, mentionIdx);
+    const mentions = content.slice(mentionIdx).trimEnd();
+    updated = `${before}${updateSection}${mentions}\n${mentionLink}\n`;
   }
 
-  const todayStr = today();
-  const withDate = readFileSync(absPath, 'utf-8').replace(
-    /updated: \d{4}-\d{2}-\d{2}/,
-    `updated: ${todayStr}`,
-  );
-  writeFileSync(absPath, withDate, 'utf-8');
+  updated = updated.replace(/^updated: .*$/m, `updated: ${today()}`);
+  writeFileSync(absPath, updated, 'utf-8');
   return true;
 }
 
@@ -335,7 +384,8 @@ function updateIndex(pagesCreated: string[]): void {
   writeFileSync(indexPath, content, 'utf-8');
 }
 
-function updateLog(processed: ProcessedMeeting, pagesCreated: string[], rawRelPath: string): void {
+function updateLog(processed: ProcessedMeeting, result: IngestResult, rawRelPath: string): void {
+  const { pagesCreated, pagesUpdated, unresolved } = result;
   const logPath = join(VAULT_PATH, 'wiki/log.md');
   if (!existsSync(logPath)) {
     writeFileSync(logPath, '---\ntype: meta\ntitle: Log\n---\n\n# Ingest Log\n\n', 'utf-8');
@@ -343,15 +393,18 @@ function updateLog(processed: ProcessedMeeting, pagesCreated: string[], rawRelPa
 
   const content = readFileSync(logPath, 'utf-8');
   const date = today();
-  const pages = pagesCreated.map((p) => `[[${p.replace(/\.md$/, '').split('/').pop()}]]`).join(', ');
+  // Meeting and source pages share a slug; list each link once
+  const links = (paths: string[]) =>
+    [...new Set(paths.map((p) => `[[${p.replace(/\.md$/, '').split('/').pop()}]]`))].join(', ');
 
   const entry = [
     `## [${date}] ingest | ${processed.meeting.title}`,
     `- Source: \`${rawRelPath}\``,
-    `- Pages created: ${pages}`,
-    `- Entities: ${processed.entities.length}, Concepts: ${processed.conceptNotes.length}`,
+    `- Pages created: ${links(pagesCreated)}`,
+    pagesUpdated.length > 0 ? `- Pages updated: ${links(pagesUpdated)}` : null,
+    unresolved.length > 0 ? `- Unresolved (plain text, no page): ${unresolved.join(', ')}` : null,
     '',
-  ].join('\n');
+  ].filter((l) => l !== null).join('\n');
 
   const fmEnd = content.indexOf('---', content.indexOf('---') + 1);
   if (fmEnd === -1) {
@@ -423,6 +476,7 @@ export function wikiIngest(
     sourcePath: rawRelPath,
     pagesCreated: [],
     pagesUpdated: [],
+    unresolved: [],
     skipped: false,
   };
 
@@ -446,44 +500,64 @@ export function wikiIngest(
 
   ensureDirs();
 
-  // Meeting page
   const meetingSlug = `${date}-${slug}`;
+
+  // Resolve entities against existing pages (any sub-folder) before writing anything,
+  // so no first-name or flat duplicates get created
+  const entityPlan: Array<{ entity: Entity; path: string; exists: boolean }> = [];
+  for (const entity of entities) {
+    const existing = findEntityPath(entity.slug);
+    if (existing) entityPlan.push({ entity, path: existing, exists: true });
+    else if (isFirstNameOnly(entity)) result.unresolved.push(entity.name);
+    else entityPlan.push({ entity, path: newEntityPath(entity), exists: false });
+  }
+  const existingConcepts = new Map(conceptRoster().map((p) => [p.slug, p.path]));
+  const resolved: ProcessedMeeting = { ...processed, entities: entityPlan.map((p) => p.entity) };
+
+  // Links may only point at pages that exist or are being created now
+  const known = allWikiSlugs();
+  known.add(meetingSlug);
+  for (const e of resolved.entities) known.add(e.slug);
+  for (const c of conceptNotes) known.add(c.slug);
+
+  // Meeting page
   const meetingPath = `wiki/meetings/${meetingSlug}.md`;
-  if (writePage(meetingPath, buildMeetingPage(processed, rawRelPath))) {
+  if (writePage(meetingPath, buildMeetingPage(resolved, known))) {
     result.pagesCreated.push(meetingPath);
   }
 
   // Source page
-  const sourceSlug = `${date}-${slug}`;
-  const sourcePath = `wiki/sources/${sourceSlug}.md`;
-  if (writePage(sourcePath, buildSourcePage(processed, rawRelPath))) {
+  const sourcePath = `wiki/sources/${meetingSlug}.md`;
+  if (writePage(sourcePath, buildSourcePage(resolved, rawRelPath))) {
     result.pagesCreated.push(sourcePath);
   }
 
   // Entity pages
-  for (const entity of entities) {
-    const entityPath = `wiki/entities/${entity.slug}.md`;
-    if (existsSync(join(VAULT_PATH, entityPath))) {
-      if (appendToEntityPage(entityPath, rawRelPath)) {
-        result.pagesUpdated.push(entityPath);
-      }
-    } else if (writePage(entityPath, buildEntityPage(entity, rawRelPath))) {
-      result.pagesCreated.push(entityPath);
+  for (const { entity, path, exists } of entityPlan) {
+    const clean = { ...entity, description: unlinkUnknown(entity.description, known) };
+    if (exists) {
+      if (updateExistingPage(path, meetingSlug, clean.description)) result.pagesUpdated.push(path);
+    } else if (writePage(path, buildEntityPage(clean, meetingSlug))) {
+      result.pagesCreated.push(path);
     }
   }
 
   // Concept pages
   for (const concept of conceptNotes) {
-    const conceptPath = `wiki/concepts/${concept.slug}.md`;
-    if (writePage(conceptPath, buildConceptPage(concept, rawRelPath))) {
-      result.pagesCreated.push(conceptPath);
+    const clean = { ...concept, content: unlinkUnknown(concept.content, known) };
+    const existing = existingConcepts.get(concept.slug);
+    if (existing) {
+      if (updateExistingPage(existing, meetingSlug, conceptBody(clean))) result.pagesUpdated.push(existing);
+    } else {
+      const conceptPath = `wiki/concepts/${concept.slug}.md`;
+      if (writePage(conceptPath, buildConceptPage(clean, meetingSlug))) result.pagesCreated.push(conceptPath);
     }
   }
 
   // Meta updates
   updateIndex(result.pagesCreated);
-  updateLog(processed, result.pagesCreated, rawRelPath);
-  updateHot(processed, result.pagesCreated);
+  updateLog(resolved, result, rawRelPath);
+  updateHot(resolved, result.pagesCreated);
 
   // Update manifest
   const hash = existsSync(rawAbsPath) ? md5(readFileSync(rawAbsPath, 'utf-8')) : '';

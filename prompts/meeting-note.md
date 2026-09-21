@@ -91,15 +91,13 @@ tags:
 # Title
 
 One-paragraph description of this topic based on what was discussed in the meeting.
-
-## Mentioned In
-- [[YYYY-MM-DD-meeting-slug]]
 ```
 
 Rules for concept notes:
 - Do not create a concept note for a topic that gets only passing mention
 - Keep content factual — only what is evidenced in the meeting data
-- The `Mentioned In` section links back to the meeting note that generated this concept page
+- Do not add a `Mentioned In` section; the pipeline adds it
+- Check "Existing concept pages" in the input first. If the topic already has a page (same idea under a different name, or a broader page that covers it), reuse that exact slug and write `content` as an update paragraph about what this meeting adds. Only invent a new slug for a genuinely new topic
 
 ---
 
@@ -119,3 +117,11 @@ Rules for entities:
 - For people: use full name as title, firstname-lastname as slug
 - For organisations: use official name, kebab-case slug
 - Keep descriptions factual — only what is evidenced in the meeting data
+- Check "Existing entity pages" in the input first. Meetings usually refer to people by first name or a misheard spelling (e.g. "Jarrett" → `jarrett-yeap`, "Gerald Pong" → `gerald-png`). If an existing page plausibly matches, reuse its exact slug
+- Never use a first-name-only slug for a person. If you cannot determine the full name and no existing page matches, omit that person from `entities`
+
+## Wikilinks
+
+Applies to the meeting note and concept notes:
+- Link people and topics only by slugs that are in the existing page lists or that you are creating in this response. Mention anyone else as plain text
+- The meeting note must have exactly one `## Related` section
