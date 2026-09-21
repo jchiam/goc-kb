@@ -17,7 +17,7 @@ goc-kb/
 │   ├── ingest-single.ts  # CLI: ingest one meeting by ID
 │   ├── granola-client.ts # Granola public API client
 │   ├── process.ts        # Claude API call; extracts entities + concepts
-│   ├── write.ts          # writes enriched source files to .raw/transcripts/
+│   ├── write.ts          # writes verbatim Granola source files to .raw/transcripts/
 │   ├── wiki-ingest.ts    # creates wiki pages from processed data
 │   ├── state.ts          # state load/save (stored in vault)
 │   └── types.ts          # shared interfaces
@@ -43,9 +43,10 @@ goc-kb/
 ## Key commands
 
 ```bash
-npm run inbox                            # list un-ingested meetings (JSON)
+npm run inbox                            # list new + edited-since-ingest meetings (JSON)
 npm run inbox -- --no-update             # same, without advancing lastCheckedAt
 npm run ingest -- --meeting-id <id>      # ingest one meeting
+npm run ingest -- --meeting-id <id> --refresh  # re-fetch raw source only (no LLM, no wiki writes)
 npm run ingest -- --meeting-id <id> --dry-run  # preview without writes
 npm run build                            # tsc compile to dist/
 ```
@@ -67,7 +68,11 @@ npm run build                            # tsc compile to dist/
 
 **State tracking**: `$OBSIDIAN_VAULT_PATH/.raw/.ingest-state.json` stores `{ lastCheckedAt }`. Represents when meetings were last listed (not ingested). Delete to re-check from `LOOKBACK_DAYS` horizon.
 
-**Deduplication**: File-based — `inbox.ts` checks if `.raw/transcripts/<date>-<slug>.md` exists or is tracked in `.raw/.manifest.json`. Already-ingested meetings are filtered out of the inbox listing.
+**Granola fields**: `private_notes_markdown` (user's typed notes), `summary_markdown` (AI summary incl. user edits; authoritative for names/terms), `transcript` (raw speech-to-text, often mishears names). There is no `content_markdown`.
+
+**Raw source** (`write.ts`): Granola content verbatim (private notes, summary, transcript) with `granola_updated_at` in frontmatter. Not LLM output, so `--refresh` can rewrite it without an LLM call.
+
+**Deduplication**: File-based — `inbox.ts` lists notes with `updated_after: lastCheckedAt`. A note whose `.raw/transcripts/<date>-<slug>.md` doesn't exist (and isn't in `.raw/.manifest.json`) is `new`. An ingested note whose Granola `updated_at` is newer than the raw file's `granola_updated_at` is `updated`. `--refresh` rewrites the raw file and re-records its manifest hash so a later ingest still skips it.
 
 **Claude call** (`process.ts`): Single `messages.create` call per meeting. System prompt (`meeting-note.md`) is cached via `cache_control: ephemeral`. Response must be JSON `{ meetingNote, conceptNotes[], entities[] }`.
 

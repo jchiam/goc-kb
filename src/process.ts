@@ -27,6 +27,10 @@ function formatInput(meeting: MeetingDetail): string {
     parts.push(`\n## Notes\n${meeting.notes}`);
   }
 
+  if (meeting.summary.trim()) {
+    parts.push(`\n## Summary (user-edited)\n${meeting.summary}`);
+  }
+
   if (meeting.transcript.trim()) {
     parts.push(`\n## Transcript\n${meeting.transcript}`);
   }

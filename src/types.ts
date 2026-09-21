@@ -10,7 +10,13 @@ export interface MeetingDetail {
   id: string;
   title: string;
   createdAt: string;
+  updatedAt?: string;
+  webUrl?: string;
+  attendees: string[];
+  /** User's own typed notes (Granola private notes) */
   notes: string;
+  /** Granola AI summary, including any edits the user made to it */
+  summary: string;
   transcript: string;
 }
 

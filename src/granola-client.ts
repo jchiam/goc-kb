@@ -36,8 +36,10 @@ interface ApiNote {
   title: string;
   created_at: string;
   updated_at?: string;
-  content_markdown?: string;
-  transcript?: Array<{ source: string; diarization_label?: string; text: string; start_timestamp?: string }>;
+  web_url?: string;
+  summary_markdown?: string;
+  private_notes_markdown?: string;
+  transcript?: Array<{ source?: string; diarization_label?: string; text: string; start_timestamp?: string }>;
   attendees?: Array<{ name?: string; email?: string }>;
 }
 
@@ -47,13 +49,17 @@ interface ListNotesResponse {
   next_cursor?: string;
 }
 
-export async function listMeetings(since: string, limit = 100): Promise<GranolaMeeting[]> {
+export async function listMeetings(
+  since: string,
+  limit = 100,
+  filter: 'created_after' | 'updated_after' = 'created_after',
+): Promise<GranolaMeeting[]> {
   const meetings: GranolaMeeting[] = [];
   let cursor: string | undefined;
 
   while (meetings.length < limit) {
     const params = new URLSearchParams({
-      created_after: since,
+      [filter]: since,
       page_size: '30',
     });
     if (cursor) params.set('cursor', cursor);
@@ -76,14 +82,16 @@ export async function listMeetings(since: string, limit = 100): Promise<GranolaM
   return meetings.slice(0, limit);
 }
 
-export async function getMeetingDetail(meeting: GranolaMeeting): Promise<MeetingDetail> {
-  const note = (await apiFetch(`/v1/notes/${meeting.id}?include=transcript`)) as ApiNote;
+export async function getMeetingDetail(meetingId: string): Promise<MeetingDetail> {
+  const note = (await apiFetch(`/v1/notes/${meetingId}?include=transcript`)) as ApiNote;
 
   const transcript = Array.isArray(note.transcript)
     ? note.transcript
         .map((entry) => {
-          const speaker = entry.diarization_label ?? (entry.source === 'microphone' ? 'You' : 'Participant');
-          return `${speaker}: ${entry.text}`;
+          // Some notes carry no speaker info at all; don't invent a label
+          const speaker =
+            entry.diarization_label ?? (entry.source ? (entry.source === 'microphone' ? 'You' : 'Participant') : null);
+          return speaker ? `${speaker}: ${entry.text}` : entry.text;
         })
         .join('\n')
     : '';
@@ -92,7 +100,11 @@ export async function getMeetingDetail(meeting: GranolaMeeting): Promise<Meeting
     id: note.id,
     title: note.title,
     createdAt: note.created_at,
-    notes: (note.content_markdown ?? '').trim(),
+    updatedAt: note.updated_at,
+    webUrl: note.web_url,
+    attendees: (note.attendees ?? []).map((a) => a.name ?? a.email ?? '').filter(Boolean),
+    notes: (note.private_notes_markdown ?? '').trim(),
+    summary: (note.summary_markdown ?? '').trim(),
     transcript: transcript.trim(),
   };
 }

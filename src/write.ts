@@ -1,6 +1,6 @@
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ProcessedMeeting } from './types.js';
+import type { MeetingDetail } from './types.js';
 
 const VAULT_PATH = process.env.VAULT_PATH ?? process.env.OBSIDIAN_VAULT_PATH ?? '/vault';
 const RAW_TRANSCRIPTS_DIR = '.raw/transcripts';
@@ -15,110 +15,58 @@ function slugify(text: string): string {
     .slice(0, 60);
 }
 
-interface Frontmatter {
-  meta: Record<string, unknown>;
-  body: string;
+/** Vault-relative path of a meeting's raw source file. */
+export function rawRelPath(title: string, createdAt: string): string {
+  return `${RAW_TRANSCRIPTS_DIR}/${createdAt.split('T')[0]}-${slugify(title)}.md`;
 }
 
-function parseFrontmatter(markdown: string): Frontmatter {
-  const match = markdown.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!match) return { meta: {}, body: markdown };
-
-  const meta: Record<string, unknown> = {};
-  const lines = match[1].split('\n');
-  let currentKey = '';
-
-  for (const line of lines) {
-    const scalarMatch = line.match(/^(\w[\w_]*):\s*(.+)$/);
-    if (scalarMatch) {
-      currentKey = scalarMatch[1];
-      meta[currentKey] = scalarMatch[2].replace(/^["']|["']$/g, '');
-      continue;
-    }
-    const arrayKeyMatch = line.match(/^(\w[\w_]*):\s*$/);
-    if (arrayKeyMatch) {
-      currentKey = arrayKeyMatch[1];
-      meta[currentKey] = [];
-      continue;
-    }
-    const itemMatch = line.match(/^\s+-\s+(.+)$/);
-    if (itemMatch && currentKey && Array.isArray(meta[currentKey])) {
-      (meta[currentKey] as string[]).push(itemMatch[1]);
-    }
-  }
-
-  return { meta, body: match[2].trim() };
+/** Granola `updated_at` recorded in a raw source file, or null if absent (legacy files). */
+export function readRawUpdatedAt(relPath: string): string | null {
+  const absPath = join(VAULT_PATH, relPath);
+  if (!existsSync(absPath)) return null;
+  const match = readFileSync(absPath, 'utf-8').match(/^granola_updated_at:\s*"?([^"\n]+)"?\s*$/m);
+  return match ? match[1] : null;
 }
 
-function serializeFrontmatter(obj: Record<string, unknown>): string {
-  const lines: string[] = [];
-  for (const [key, value] of Object.entries(obj)) {
-    if (Array.isArray(value)) {
-      lines.push(`${key}:`);
-      for (const item of value) {
-        lines.push(`  - ${item}`);
-      }
-    } else if (typeof value === 'string' && (value.includes(':') || value.includes('"') || value.includes("'"))) {
-      lines.push(`${key}: "${value.replace(/"/g, '\\"')}"`);
-    } else {
-      lines.push(`${key}: ${value}`);
-    }
-  }
-  return lines.join('\n');
-}
-
-export function writeRawSource(processed: ProcessedMeeting, dryRun = false): string | null {
-  const { meeting, meetingNote, conceptNotes } = processed;
-  const date = meeting.createdAt.split('T')[0];
-  const slug = slugify(meeting.title);
-  const filename = `${date}-${slug}.md`;
-  const dir = join(VAULT_PATH, RAW_TRANSCRIPTS_DIR);
-  const filePath = join(dir, filename);
-
-  if (dryRun) {
-    console.log(`[dry-run] Would write raw source: ${filePath}`);
-    if (conceptNotes.length > 0) {
-      console.log(`[dry-run]   with ${conceptNotes.length} extracted concept(s)`);
-    }
-    return null;
-  }
-
-  if (existsSync(filePath)) {
-    console.log(`Already exists: ${filePath}`);
-    return null;
-  }
-
-  const { meta, body } = parseFrontmatter(meetingNote);
-
-  const sourceMeta: Record<string, unknown> = {
-    title: `"${String(meeting.title).replace(/"/g, '\\"')}"`,
-    date: (meta.date as string) ?? date,
-    source: 'granola',
-    granola_id: `"${meeting.id}"`,
-    attendees: (meta.attendees as string[]) ?? [],
-    tags: (meta.tags as string[]) ?? ['meeting'],
-    type: 'meeting-transcript',
-  };
-
-  const parts: string[] = [
-    `---\n${serializeFrontmatter(sourceMeta)}\n---\n`,
-    body,
+/** Raw source = Granola content verbatim, so it can be refreshed without an LLM call. */
+function renderRawSource(meeting: MeetingDetail): string {
+  const fm = [
+    `title: ${JSON.stringify(meeting.title)}`,
+    `date: ${meeting.createdAt.split('T')[0]}`,
+    'source: granola',
+    `granola_id: ${JSON.stringify(meeting.id)}`,
   ];
+  if (meeting.webUrl) fm.push(`granola_url: ${JSON.stringify(meeting.webUrl)}`);
+  if (meeting.updatedAt) fm.push(`granola_updated_at: ${JSON.stringify(meeting.updatedAt)}`);
+  fm.push('attendees:', ...meeting.attendees.map((a) => `  - ${JSON.stringify(a)}`));
+  fm.push('tags:', '  - meeting', 'type: meeting-transcript');
 
-  if (conceptNotes.length > 0) {
-    const conceptSections = conceptNotes.map((c) => {
-      const { body: conceptBody } = parseFrontmatter(c.content);
-      const stripped = conceptBody.replace(/^#\s+.+\n*/, '');
-      return `### ${c.title}\n\n${stripped.trim()}`;
-    });
-    parts.push('---\n\n## Extracted Concepts\n');
-    parts.push(conceptSections.join('\n\n'));
+  const parts = [`---\n${fm.join('\n')}\n---`];
+  if (meeting.notes) parts.push(`## Private Notes\n\n${meeting.notes}`);
+  if (meeting.summary) parts.push(`## Granola Summary\n\n${meeting.summary}`);
+  if (meeting.transcript) parts.push(`## Transcript\n\n${meeting.transcript.split('\n').join('\n\n')}`);
+
+  return parts.join('\n\n') + '\n';
+}
+
+export function writeRawSource(
+  meeting: MeetingDetail,
+  opts: { dryRun?: boolean; overwrite?: boolean } = {},
+): string | null {
+  const filePath = join(VAULT_PATH, rawRelPath(meeting.title, meeting.createdAt));
+
+  if (opts.dryRun) {
+    console.error(`[dry-run] Would write raw source: ${filePath}`);
+    return null;
   }
 
-  const content = parts.join('\n\n') + '\n';
+  if (existsSync(filePath) && !opts.overwrite) {
+    console.error(`Already exists: ${filePath}`);
+    return null;
+  }
 
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(filePath, content, 'utf-8');
-  console.log(`Written raw source: ${filePath}`);
+  mkdirSync(join(VAULT_PATH, RAW_TRANSCRIPTS_DIR), { recursive: true });
+  writeFileSync(filePath, renderRawSource(meeting), 'utf-8');
+  console.error(`Written raw source: ${filePath}`);
   return filePath;
 }

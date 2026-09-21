@@ -18,6 +18,7 @@ interface ManifestEntry {
   ingested_at: string;
   pages_created: string[];
   pages_updated: string[];
+  refreshed_at?: string;
 }
 
 interface Manifest {
@@ -496,4 +497,19 @@ export function wikiIngest(
 
   result.pagesUpdated.push('wiki/index.md', 'wiki/log.md', 'wiki/hot.md');
   return result;
+}
+
+/**
+ * After a raw source is refreshed from Granola, re-record its hash so the
+ * next ingest still treats it as done instead of regenerating wiki pages.
+ */
+export function recordRawRefresh(rawRelPath: string): boolean {
+  const manifest = loadManifest();
+  const entry = manifest.sources[rawRelPath];
+  const rawAbsPath = join(VAULT_PATH, rawRelPath);
+  if (!entry || !existsSync(rawAbsPath)) return false;
+  entry.hash = md5(readFileSync(rawAbsPath, 'utf-8'));
+  entry.refreshed_at = today();
+  saveManifest(manifest);
+  return true;
 }

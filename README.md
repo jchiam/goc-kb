@@ -114,9 +114,10 @@ wiki/
 Run from the project root:
 
 ```bash
-npm run inbox                            # list un-ingested meetings (JSON)
+npm run inbox                            # list new + edited-since-ingest meetings (JSON)
 npm run inbox -- --no-update             # peek without advancing timestamp
 npm run ingest -- --meeting-id <id>      # ingest one meeting
+npm run ingest -- --meeting-id <id> --refresh  # re-fetch raw source only (no LLM, no wiki writes)
 npm run ingest -- --meeting-id <id> --dry-run  # preview without writes
 npm run build                            # typecheck
 ```
@@ -131,5 +132,5 @@ Check that `GRANOLA_API_KEY` is valid: `curl -H "Authorization: Bearer $GRANOLA_
 **Auth error (401)**
 API key was revoked. Generate a new one in Granola desktop: Settings → API. Update `.env`.
 
-**"Meeting not found in last 90 days"**
-The ingest command looks back 90 days to find a meeting by ID. If the meeting is older, it won't be found via the API.
+**Edits made in Granola after ingest**
+`inbox` lists these with `status: "updated"` (compares Granola `updated_at` with `granola_updated_at` in the raw source). Run `ingest --refresh` to pull the new version into `.raw/transcripts/`, then update wiki pages by hand.

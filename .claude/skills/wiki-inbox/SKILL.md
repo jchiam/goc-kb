@@ -11,7 +11,7 @@ triggers:
 
 # Wiki Inbox
 
-Surface Granola meetings that haven't been ingested into the knowledge base yet.
+Surface Granola meetings that haven't been ingested into the knowledge base yet, and ingested meetings that were edited in Granola afterwards.
 
 ## Steps
 
@@ -19,15 +19,20 @@ Surface Granola meetings that haven't been ingested into the knowledge base yet.
    ```bash
    cd ~/Development/goc-kb && npm run inbox
    ```
-2. Parse the JSON output — an array of `{ id, title, created_at, updated_at }`.
+2. Parse the JSON output — an array of `{ id, title, created_at, updated_at, status, ingested_updated_at? }`. `status` is `new` (never ingested) or `updated` (ingested, edited in Granola since; `ingested_updated_at` is the version captured, null for legacy raw files).
 3. If empty, tell the user the vault is up to date.
-4. Present as a numbered list: **title** — date.
-5. Ask the user which meetings to ingest (by number, range, or "all"). They may also choose to skip.
-6. For each selected meeting, run:
+4. Present as a numbered list: **title** — date — new/updated.
+5. Ask the user which meetings to process (by number, range, or "all"). They may also choose to skip.
+6. For each selected `new` meeting, run:
    ```bash
    cd ~/Development/goc-kb && npm run ingest -- --meeting-id <id>
    ```
-7. Report results: pages created, pages updated, any errors.
+7. For each selected `updated` meeting, refresh the raw source only (no LLM call, no wiki writes):
+   ```bash
+   cd ~/Development/goc-kb && npm run ingest -- --meeting-id <id> --refresh
+   ```
+   Then diff the refreshed `.raw/transcripts/` file against git, and hand-apply corrections (names, terms, facts) to the meeting, source, entity, and concept pages that came from that meeting.
+8. Report results: pages created, pages updated, any errors.
 
 ## Notes
 
