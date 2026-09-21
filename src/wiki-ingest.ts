@@ -378,35 +378,35 @@ function updateHot(processed: ProcessedMeeting, pagesCreated: string[]): void {
   const concepts = processed.conceptNotes.map((c) => `[[${c.slug}]]`).join(', ');
 
   const section = [
-    `### ${date} — ${processed.meeting.title}`,
+    `## Last Ingest: ${date} (Granola: ${processed.meeting.title})`,
+    '',
     `- ${pagesCreated.length} pages created`,
     entities ? `- Entities: ${entities}` : null,
     concepts ? `- Concepts: ${concepts}` : null,
-  ].filter(Boolean).join('\n');
+    '',
+    '---',
+    '',
+    '',
+  ].filter((l) => l !== null).join('\n');
 
   if (!existsSync(hotPath)) {
-    const seed = `---\ntype: meta\ntitle: Hot Cache\n---\n\n# Recent Ingests\n\n${section}\n`;
+    const seed = `---\ntype: meta\ntitle: Hot Cache\n---\n\n# Recent Context\n\n${section}`;
     writeFileSync(hotPath, seed, 'utf-8');
     return;
   }
 
-  let content = readFileSync(hotPath, 'utf-8');
-  const marker = '# Recent Ingests';
-  const markerIdx = content.indexOf(marker);
-  if (markerIdx === -1) {
-    content += `\n${marker}\n\n${section}\n`;
-  } else {
-    const insertAt = markerIdx + marker.length;
-    content = content.slice(0, insertAt) + `\n\n${section}` + content.slice(insertAt);
-  }
+  // hot.md is hand-curated: insert newest-first under its first H1 (whatever it is
+  // called) and never truncate. Its size is managed by hand, not by line count.
+  const content = readFileSync(hotPath, 'utf-8');
+  const fm = content.match(/^---\n[\s\S]*?\n---\n/);
+  const bodyStart = fm ? fm[0].length : 0;
+  const h1 = /^# .*\n+/m.exec(content.slice(bodyStart));
+  const insertAt = h1 ? bodyStart + h1.index + h1[0].length : content.length;
+  const prefix = h1 ? '' : '\n';
+  // Demote the previous newest entry, matching the vault's hand-written convention
+  const rest = content.slice(insertAt).replace(/^## Last Ingest:/m, '## Previous Ingest:');
 
-  // Keep only last ~20 entries (trim if huge)
-  const lines = content.split('\n');
-  if (lines.length > 200) {
-    content = lines.slice(0, 200).join('\n') + '\n';
-  }
-
-  writeFileSync(hotPath, content, 'utf-8');
+  writeFileSync(hotPath, content.slice(0, insertAt) + prefix + section + rest, 'utf-8');
 }
 
 export function wikiIngest(
