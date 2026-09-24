@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
 import type { ProcessedMeeting, Entity, ConceptNote } from './types.js';
-import { allWikiSlugs, conceptRoster, findEntityPath, isFirstNameOnly, newEntityPath } from './vault.js';
+import { allWikiSlugs, findPagePath, isFirstNameOnly, loadCorrections, newEntityPath } from './vault.js';
 
 const VAULT_PATH = process.env.VAULT_PATH ?? process.env.OBSIDIAN_VAULT_PATH ?? '/vault';
 
@@ -114,6 +114,51 @@ function stripSection(markdown: string, heading: string): string {
   return markdown.replace(new RegExp(`^## ${heading}\\n[\\s\\S]*?(?=^## |(?![\\s\\S]))`, 'gm'), '');
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Fix known speech-to-text errors in everything the LLM produced, before any page or slug
+ * is derived from it. Slugs get the kebab-case form of each correction.
+ */
+export function applyCorrections(processed: ProcessedMeeting): ProcessedMeeting {
+  const pairs = Object.entries(loadCorrections());
+  if (pairs.length === 0) return processed;
+  const fixText = (text: string) =>
+    pairs.reduce((t, [from, to]) => t.replace(new RegExp(`\\b${escapeRegExp(from)}\\b`, 'g'), to), text);
+  const fixSlug = (slug: string) =>
+    pairs.reduce(
+      (s, [from, to]) => s.replace(new RegExp(`(^|-)${escapeRegExp(slugify(from))}(?=-|$)`, 'g'), `$1${slugify(to)}`),
+      slug,
+    );
+  // Prose and wikilink targets both carry the error
+  const fixMarkdown = (text: string) =>
+    fixText(text).replace(/\[\[([^\]|#]+)/g, (_m, target: string) => `[[${fixSlug(target.trim())}`);
+  return {
+    ...processed,
+    meetingNote: fixMarkdown(processed.meetingNote),
+    conceptNotes: processed.conceptNotes.map((c) => ({
+      slug: fixSlug(c.slug),
+      title: fixText(c.title),
+      content: fixMarkdown(c.content),
+    })),
+    entities: processed.entities.map((e) => ({
+      ...e,
+      slug: fixSlug(e.slug),
+      name: fixText(e.name),
+      role: e.role ? fixText(e.role) : e.role,
+      description: fixMarkdown(e.description),
+    })),
+  };
+}
+
+/** First paragraph of the LLM meeting note's `## Summary` section, for hot.md. */
+function meetingSummary(meetingNote: string): string {
+  const section = meetingNote.match(/^## Summary\n+([\s\S]*?)(?=\n## |\n*$)/m)?.[1] ?? '';
+  return section.split(/\n\s*\n/)[0].replace(/\s+/g, ' ').trim();
+}
+
 function ensureDirs(): void {
   const dirs = ['wiki/sources', 'wiki/entities', 'wiki/concepts', 'wiki/meetings'];
   for (const dir of dirs) {
@@ -159,7 +204,7 @@ function parseMeetingNoteFrontmatter(meetingNote: string): { meta: Record<string
   return { meta, body: match[2].trim() };
 }
 
-function buildMeetingPage(processed: ProcessedMeeting, known: Set<string>): string {
+function buildMeetingPage(processed: ProcessedMeeting, known: Set<string>, sourceSlug: string): string {
   const { meeting, meetingNote, conceptNotes, entities } = processed;
   const parsed = parseMeetingNoteFrontmatter(meetingNote);
   const meta = parsed.meta;
@@ -189,6 +234,7 @@ function buildMeetingPage(processed: ProcessedMeeting, known: Set<string>): stri
   fm.push('source: granola');
   fm.push(`granola_id: ${meeting.id}`);
   if (address) fm.push(`address: ${address}`);
+  fm.push(`source_page: "[[${sourceSlug}]]"`);
   fm.push('---');
 
   const relatedSlugs = [
@@ -205,7 +251,7 @@ function buildMeetingPage(processed: ProcessedMeeting, known: Set<string>): stri
   return parts.join('\n');
 }
 
-function buildSourcePage(processed: ProcessedMeeting, rawRelPath: string): string {
+function buildSourcePage(processed: ProcessedMeeting, rawRelPath: string, meetingSlug: string): string {
   const { meeting, conceptNotes, entities } = processed;
   const date = meeting.createdAt.split('T')[0];
   const related = [
@@ -240,7 +286,7 @@ function buildSourcePage(processed: ProcessedMeeting, rawRelPath: string): strin
     '',
     `## Summary`,
     '',
-    `Meeting on ${date}: ${meeting.title}.`,
+    `Meeting on ${date}: [[${meetingSlug}|${meeting.title.replace(/[|[\]]/g, '')}]].`,
     '',
     '## Pages Created',
     '',
@@ -342,7 +388,9 @@ function updateExistingPage(relPath: string, meetingSlug: string, update: string
   const mentionLink = `- [[${meetingSlug}]]`;
   if (content.includes(mentionLink)) return false;
 
-  const updateSection = update.trim() ? `## Update (${today()})\n\n${update.trim()}\n\n` : '';
+  // The update is body text only: a leading H1 would read as a second page title
+  const text = update.replace(/^(\s*#\s+.+\n+)+/, '').trim();
+  const updateSection = text ? `## Update (${today()})\n\n${text}\n\n` : '';
   const mentionIdx = content.search(/^## Mentioned In\n/m);
   let updated: string;
   if (mentionIdx === -1) {
@@ -393,7 +441,7 @@ function updateLog(processed: ProcessedMeeting, result: IngestResult, rawRelPath
 
   const content = readFileSync(logPath, 'utf-8');
   const date = today();
-  // Meeting and source pages share a slug; list each link once
+  // List each link once
   const links = (paths: string[]) =>
     [...new Set(paths.map((p) => `[[${p.replace(/\.md$/, '').split('/').pop()}]]`))].join(', ');
 
@@ -429,10 +477,14 @@ function updateHot(processed: ProcessedMeeting, pagesCreated: string[]): void {
   const date = today();
   const entities = processed.entities.map((e) => `[[${e.slug}]]`).join(', ');
   const concepts = processed.conceptNotes.map((c) => `[[${c.slug}]]`).join(', ');
+  const meetingPage = pagesCreated.find((p) => p.startsWith('wiki/meetings/'));
+  const summary = meetingSummary(processed.meetingNote);
 
   const section = [
     `## Last Ingest: ${date} (Granola: ${processed.meeting.title})`,
     '',
+    summary ? `${meetingPage ? `[[${meetingPage.split('/').pop()!.replace(/\.md$/, '')}]]: ` : ''}${summary}` : null,
+    summary ? '' : null,
     `- ${pagesCreated.length} pages created`,
     entities ? `- Entities: ${entities}` : null,
     concepts ? `- Concepts: ${concepts}` : null,
@@ -463,9 +515,10 @@ function updateHot(processed: ProcessedMeeting, pagesCreated: string[]): void {
 }
 
 export function wikiIngest(
-  processed: ProcessedMeeting,
+  llmOutput: ProcessedMeeting,
   opts: { dryRun?: boolean } = {},
 ): IngestResult {
+  const processed = applyCorrections(llmOutput);
   const { meeting, conceptNotes, entities } = processed;
   const date = meeting.createdAt.split('T')[0];
   const slug = slugify(meeting.title);
@@ -501,34 +554,36 @@ export function wikiIngest(
   ensureDirs();
 
   const meetingSlug = `${date}-${slug}`;
+  // Distinct basename so [[meetingSlug]] always resolves to the meeting page
+  const sourceSlug = `${meetingSlug}-source`;
 
-  // Resolve entities against existing pages (any sub-folder) before writing anything,
-  // so no first-name or flat duplicates get created
+  // Resolve entities against existing entity or concept pages before writing anything,
+  // so no first-name, flat, or cross-folder duplicates get created
   const entityPlan: Array<{ entity: Entity; path: string; exists: boolean }> = [];
   for (const entity of entities) {
-    const existing = findEntityPath(entity.slug);
+    const existing = findPagePath(entity.slug);
     if (existing) entityPlan.push({ entity, path: existing, exists: true });
     else if (isFirstNameOnly(entity)) result.unresolved.push(entity.name);
     else entityPlan.push({ entity, path: newEntityPath(entity), exists: false });
   }
-  const existingConcepts = new Map(conceptRoster().map((p) => [p.slug, p.path]));
   const resolved: ProcessedMeeting = { ...processed, entities: entityPlan.map((p) => p.entity) };
 
   // Links may only point at pages that exist or are being created now
   const known = allWikiSlugs();
   known.add(meetingSlug);
+  known.add(sourceSlug);
   for (const e of resolved.entities) known.add(e.slug);
   for (const c of conceptNotes) known.add(c.slug);
 
   // Meeting page
   const meetingPath = `wiki/meetings/${meetingSlug}.md`;
-  if (writePage(meetingPath, buildMeetingPage(resolved, known))) {
+  if (writePage(meetingPath, buildMeetingPage(resolved, known, sourceSlug))) {
     result.pagesCreated.push(meetingPath);
   }
 
   // Source page
-  const sourcePath = `wiki/sources/${meetingSlug}.md`;
-  if (writePage(sourcePath, buildSourcePage(resolved, rawRelPath))) {
+  const sourcePath = `wiki/sources/${sourceSlug}.md`;
+  if (writePage(sourcePath, buildSourcePage(resolved, rawRelPath, meetingSlug))) {
     result.pagesCreated.push(sourcePath);
   }
 
@@ -545,7 +600,7 @@ export function wikiIngest(
   // Concept pages
   for (const concept of conceptNotes) {
     const clean = { ...concept, content: unlinkUnknown(concept.content, known) };
-    const existing = existingConcepts.get(concept.slug);
+    const existing = findPagePath(concept.slug);
     if (existing) {
       if (updateExistingPage(existing, meetingSlug, conceptBody(clean))) result.pagesUpdated.push(existing);
     } else {

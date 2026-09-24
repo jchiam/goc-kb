@@ -61,6 +61,24 @@ export function findEntityPath(slug: string): string | null {
   return entityRoster().find((p) => p.slug === slug)?.path ?? null;
 }
 
+/**
+ * Existing entity or concept page for a slug. Slugs must be unique across the vault, so a
+ * concept must not be created where an entity already exists (and vice versa).
+ */
+export function findPagePath(slug: string): string | null {
+  return [...entityRoster(), ...conceptRoster()].find((p) => p.slug === slug)?.path ?? null;
+}
+
+/**
+ * Known speech-to-text errors, e.g. { "Ufin": "Ufinity" }, kept in the vault so they can be
+ * edited without a code change. Keys match whole words, case-sensitively.
+ */
+export function loadCorrections(): Record<string, string> {
+  const path = join(VAULT_PATH, '.vault-meta/transcription-corrections.json');
+  if (!existsSync(path)) return {};
+  return JSON.parse(readFileSync(path, 'utf-8')) as Record<string, string>;
+}
+
 export function newEntityPath(entity: Entity): string {
   return `wiki/entities/${ENTITY_DIRS[entity.entity_type] ?? 'orgs'}/${entity.slug}.md`;
 }
