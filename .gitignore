@@ -12,3 +12,6 @@ dist/
 .claude/*
 !.claude/settings.json
 !.claude/skills/
+
+# macOS
+.DS_Store
