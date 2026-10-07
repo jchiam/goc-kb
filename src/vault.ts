@@ -17,6 +17,9 @@ export interface RosterPage {
   title: string;
   /** vault-relative path */
   path: string;
+  /** frontmatter `role:`, else the first body sentence; lets the LLM tell same-named pages apart */
+  gloss: string;
+  aliases: string[];
 }
 
 function walk(dir: string): string[] {
@@ -28,18 +31,41 @@ function walk(dir: string): string[] {
   });
 }
 
-function readTitle(absPath: string, slug: string): string {
-  const head = readFileSync(absPath, 'utf-8').slice(0, 2000);
-  const fmTitle = head.match(/^title:\s*"?(.+?)"?\s*$/m);
-  if (fmTitle) return fmTitle[1];
-  const h1 = head.match(/^# (.+)$/m);
-  return h1 ? h1[1].trim() : slug;
+const GLOSS_MAX = 120;
+
+function readPageMeta(absPath: string, slug: string): Pick<RosterPage, 'title' | 'gloss' | 'aliases'> {
+  const head = readFileSync(absPath, 'utf-8').slice(0, 4000);
+  const fm = head.match(/^---\n([\s\S]*?)\n---\n?/);
+  const fmText = fm?.[1] ?? '';
+  const body = fm ? head.slice(fm[0].length) : head;
+
+  const fmTitle = fmText.match(/^title:\s*"?(.+?)"?\s*$/m);
+  const h1 = body.match(/^# (.+)$/m);
+  const title = fmTitle ? fmTitle[1] : h1 ? h1[1].trim() : slug;
+
+  const aliasBlock = fmText.match(/^aliases:\n((?:[ \t]+- .+\n?)+)/m)?.[1] ?? '';
+  const aliases = [...aliasBlock.matchAll(/^[ \t]+- "?(.+?)"?\s*$/gm)].map((m) => m[1]);
+
+  // First prose paragraph after the H1, skipping headings, callouts and lists
+  const firstPara = body
+    .replace(/^# .+$/m, '')
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .find((p) => p && !/^[#>-]/.test(p));
+  const flat = firstPara?.replace(/\s+/g, ' ') ?? '';
+  const firstSentence = flat.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? flat;
+  const role = fmText.match(/^role:\s*"?(.+?)"?\s*$/m)?.[1];
+  const gloss = (role ?? firstSentence)
+    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, target: string, label?: string) => label ?? target)
+    .slice(0, GLOSS_MAX);
+
+  return { title, gloss, aliases };
 }
 
 function roster(subdir: string): RosterPage[] {
   return walk(join(VAULT_PATH, subdir)).map((abs) => {
     const slug = abs.split('/').pop()!.replace(/\.md$/, '');
-    return { slug, title: readTitle(abs, slug), path: relative(VAULT_PATH, abs) };
+    return { slug, ...readPageMeta(abs, slug), path: relative(VAULT_PATH, abs) };
   });
 }
 
@@ -86,4 +112,47 @@ export function newEntityPath(entity: Entity): string {
 /** People must be linked by full-name slug; a bare first name is ambiguous. */
 export function isFirstNameOnly(entity: Entity): boolean {
   return entity.entity_type === 'person' && !entity.slug.includes('-');
+}
+
+/** The person whose vault this is; meetings are recorded from their side. */
+export function vaultOwner(): { name: string; aliases: string[] } {
+  const name = process.env.VAULT_OWNER ?? '';
+  const aliases = (process.env.VAULT_OWNER_ALIASES ?? '')
+    .split(',')
+    .map((a) => a.trim())
+    .filter(Boolean);
+  return { name, aliases };
+}
+
+/** Lowercase, drop "(MOE)"-style suffixes, treat `_` and `.` as spaces: "Keng Wee LEE (MOE)" → "keng wee lee". */
+export function normName(name: string): string {
+  return name
+    .replace(/\(.*?\)/g, '')
+    .replace(/[_.]/g, ' ')
+    .toLowerCase()
+    .replace(/[^a-z\s-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function personNames(page: RosterPage): string[] {
+  return [page.title, ...page.aliases].map(normName);
+}
+
+function personRoster(): RosterPage[] {
+  return entityRoster().filter((p) => p.path.startsWith('wiki/entities/people/'));
+}
+
+/** Person page whose title or alias exactly matches a Granola attendee name, else null. */
+export function resolvePersonName(name: string): RosterPage | null {
+  const target = normName(name);
+  if (!target) return null;
+  return personRoster().find((p) => personNames(p).includes(target)) ?? null;
+}
+
+/** Person pages whose title or alias starts with this first name, e.g. "Darren" → darren-lee, darren-yeo. */
+export function peopleWithFirstName(firstName: string): RosterPage[] {
+  const target = normName(firstName);
+  if (!target || target.includes(' ')) return [];
+  return personRoster().filter((p) => personNames(p).some((n) => n.split(' ')[0] === target));
 }

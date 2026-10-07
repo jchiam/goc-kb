@@ -36,7 +36,12 @@ async function main() {
   writeRawSource(detail, { dryRun });
   const result = wikiIngest(processed, { dryRun });
 
-  console.log(JSON.stringify(result, null, 2));
+  // Dry runs also show what the LLM produced, so prompt changes can be checked against
+  // already-corrected pages without writing anything
+  const output = dryRun
+    ? { ...result, llm: { meetingNote: processed.meetingNote, entities: processed.entities, inferences: processed.inferences } }
+    : result;
+  console.log(JSON.stringify(output, null, 2));
 }
 
 main().catch((err) => {

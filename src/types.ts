@@ -32,6 +32,14 @@ export interface Entity {
   entity_type: 'person' | 'organization' | 'product' | 'repository';
   role?: string;
   description: string;
+  /** Exact form the meeting used for this entity (e.g. "Darren"), for ambiguity checks */
+  mention?: string;
+}
+
+/** Something the pipeline could not settle from the source; surfaced for a human to confirm. */
+export interface ReviewItem {
+  kind: 'attendees' | 'ambiguous-mention' | 'unowned-action' | 'inferred-role';
+  detail: string;
 }
 
 export interface ProcessedMeeting {
@@ -39,5 +47,7 @@ export interface ProcessedMeeting {
   meetingNote: string;
   conceptNotes: ConceptNote[];
   entities: Entity[];
+  /** Claims the LLM could only infer from the unlabelled transcript, e.g. a reporting line */
+  inferences: string[];
 }
 

@@ -2,8 +2,18 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execSync } from 'node:child_process';
-import type { ProcessedMeeting, Entity, ConceptNote } from './types.js';
-import { allWikiSlugs, findPagePath, isFirstNameOnly, loadCorrections, newEntityPath } from './vault.js';
+import type { ProcessedMeeting, Entity, ConceptNote, ReviewItem } from './types.js';
+import {
+  allWikiSlugs,
+  findPagePath,
+  isFirstNameOnly,
+  loadCorrections,
+  newEntityPath,
+  normName,
+  peopleWithFirstName,
+  resolvePersonName,
+  vaultOwner,
+} from './vault.js';
 
 const VAULT_PATH = process.env.VAULT_PATH ?? process.env.OBSIDIAN_VAULT_PATH ?? '/vault';
 
@@ -13,6 +23,8 @@ export interface IngestResult {
   pagesUpdated: string[];
   /** People the LLM could only name by first name and no existing page matched; left as plain text */
   unresolved: string[];
+  /** Attendees, owners, and attributions the pipeline could not confirm; ask the user */
+  needsReview: ReviewItem[];
   skipped: boolean;
 }
 
@@ -42,6 +54,15 @@ function slugify(text: string): string {
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
     .slice(0, 60);
+}
+
+/**
+ * Wiki meeting slug. Vault convention writes 1:1s as `11`; titles like "[1-1] Jon / Ryan"
+ * slugify to `1-1`. Raw source paths keep the plain slugify form, since dedupe derives them
+ * from the Granola title.
+ */
+export function meetingSlugFor(title: string): string {
+  return slugify(title).replace(/(^|-)(1-1|1on1|1-on-1|one-on-one)(?=-|$)/g, '$111');
 }
 
 function md5(content: string): string {
@@ -147,6 +168,7 @@ export function applyCorrections(processed: ProcessedMeeting): ProcessedMeeting 
       ...e,
       slug: fixSlug(e.slug),
       name: fixText(e.name),
+      mention: e.mention ? fixText(e.mention) : e.mention,
       role: e.role ? fixText(e.role) : e.role,
       description: fixMarkdown(e.description),
     })),
@@ -204,7 +226,33 @@ function parseMeetingNoteFrontmatter(meetingNote: string): { meta: Record<string
   return { meta, body: match[2].trim() };
 }
 
-function buildMeetingPage(processed: ProcessedMeeting, known: Set<string>, sourceSlug: string): string {
+/**
+ * Attendees come from Granola's calendar data, never the LLM: the LLM kept adding people
+ * who were only named in the transcript. Names resolve to page titles via title/alias
+ * ("Keng Wee LEE (MOE)" → John Lee) and duplicates ("Ryan_zhuang") collapse. When Granola
+ * only knows the vault owner, the list is incomplete; mark it unverified for the user.
+ */
+export function resolveAttendees(granola: string[]): { names: string[]; verified: boolean } {
+  const owner = normName(vaultOwner().name);
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const raw of granola) {
+    const name = resolvePersonName(raw)?.title ?? raw.replace(/_/g, ' ').trim();
+    const key = normName(name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  const others = names.filter((n) => normName(n) !== owner);
+  return { names, verified: others.length > 0 };
+}
+
+function buildMeetingPage(
+  processed: ProcessedMeeting,
+  known: Set<string>,
+  sourceSlug: string,
+  attendees: { names: string[]; verified: boolean },
+): string {
   const { meeting, meetingNote, conceptNotes, entities } = processed;
   const parsed = parseMeetingNoteFrontmatter(meetingNote);
   const meta = parsed.meta;
@@ -214,7 +262,6 @@ function buildMeetingPage(processed: ProcessedMeeting, known: Set<string>, sourc
   const date = meeting.createdAt.split('T')[0];
   const address = allocateAddress();
 
-  const attendees = (meta.attendees as string[]) ?? [];
   const tags = (meta.tags as string[]) ?? ['meeting'];
 
   const fm = [
@@ -225,10 +272,11 @@ function buildMeetingPage(processed: ProcessedMeeting, known: Set<string>, sourc
     `updated: ${today()}`,
     `date: ${date}`,
   ];
-  if (attendees.length > 0) {
+  if (attendees.names.length > 0) {
     fm.push('attendees:');
-    for (const a of attendees) fm.push(`  - ${a}`);
+    for (const a of attendees.names) fm.push(`  - ${a}`);
   }
+  if (!attendees.verified) fm.push('attendees_verified: false');
   fm.push('tags:');
   for (const t of tags) fm.push(`  - ${t}`);
   fm.push('source: granola');
@@ -433,7 +481,7 @@ function updateIndex(pagesCreated: string[]): void {
 }
 
 function updateLog(processed: ProcessedMeeting, result: IngestResult, rawRelPath: string): void {
-  const { pagesCreated, pagesUpdated, unresolved } = result;
+  const { pagesCreated, pagesUpdated, unresolved, needsReview } = result;
   const logPath = join(VAULT_PATH, 'wiki/log.md');
   if (!existsSync(logPath)) {
     writeFileSync(logPath, '---\ntype: meta\ntitle: Log\n---\n\n# Ingest Log\n\n', 'utf-8');
@@ -451,6 +499,7 @@ function updateLog(processed: ProcessedMeeting, result: IngestResult, rawRelPath
     `- Pages created: ${links(pagesCreated)}`,
     pagesUpdated.length > 0 ? `- Pages updated: ${links(pagesUpdated)}` : null,
     unresolved.length > 0 ? `- Unresolved (plain text, no page): ${unresolved.join(', ')}` : null,
+    ...needsReview.map((r) => `- Needs review (${r.kind}): ${r.detail}`),
     '',
   ].filter((l) => l !== null).join('\n');
 
@@ -521,8 +570,7 @@ export function wikiIngest(
   const processed = applyCorrections(llmOutput);
   const { meeting, conceptNotes, entities } = processed;
   const date = meeting.createdAt.split('T')[0];
-  const slug = slugify(meeting.title);
-  const rawFilename = `${date}-${slug}.md`;
+  const rawFilename = `${date}-${slugify(meeting.title)}.md`;
   const rawRelPath = `.raw/transcripts/${rawFilename}`;
 
   const result: IngestResult = {
@@ -530,6 +578,7 @@ export function wikiIngest(
     pagesCreated: [],
     pagesUpdated: [],
     unresolved: [],
+    needsReview: [],
     skipped: false,
   };
 
@@ -544,29 +593,57 @@ export function wikiIngest(
     }
   }
 
+  const attendees = resolveAttendees(meeting.attendees);
+  if (!attendees.verified) {
+    result.needsReview.push({
+      kind: 'attendees',
+      detail: `Granola recorded only ${attendees.names.join(', ') || 'no one'}; confirm who attended`,
+    });
+  }
+  for (const line of processed.meetingNote.split('\n')) {
+    const task = line.match(/^- \[ \] \(owner\?\)\s*(.+)$/);
+    if (task) result.needsReview.push({ kind: 'unowned-action', detail: task[1].trim() });
+  }
+  for (const claim of processed.inferences) {
+    result.needsReview.push({ kind: 'inferred-role', detail: claim });
+  }
+
+  // Resolve entities against existing entity or concept pages before writing anything,
+  // so no first-name, flat, or cross-folder duplicates get created
+  const ownerSlug = resolvePersonName(vaultOwner().name)?.slug;
+  const entityPlan: Array<{ entity: Entity; path: string; exists: boolean }> = [];
+  for (const entity of entities) {
+    const existing = findPagePath(entity.slug);
+    // A bare first name shared by several people ("Darren") could be any of them; hold
+    // the update rather than write it onto the wrong person's page
+    const mention = entity.mention?.trim() ?? '';
+    const namesakes =
+      entity.entity_type === 'person' && mention && entity.slug !== ownerSlug ? peopleWithFirstName(mention) : [];
+    if (namesakes.length > 1) {
+      result.needsReview.push({
+        kind: 'ambiguous-mention',
+        detail: `"${mention}" could be ${namesakes.map((p) => p.slug).join(' or ')}; LLM chose ${entity.slug}, update held`,
+      });
+      continue;
+    }
+    if (existing) entityPlan.push({ entity, path: existing, exists: true });
+    else if (isFirstNameOnly(entity)) result.unresolved.push(entity.name);
+    else entityPlan.push({ entity, path: newEntityPath(entity), exists: false });
+  }
+  const resolved: ProcessedMeeting = { ...processed, entities: entityPlan.map((p) => p.entity) };
+
   if (opts.dryRun) {
-    console.log(`[dry-run] Wiki-ingest would create pages for: ${meeting.title}`);
-    console.log(`[dry-run]   ${entities.length} entities, ${conceptNotes.length} concepts`);
+    console.error(`[dry-run] Wiki-ingest would create pages for: ${meeting.title}`);
+    console.error(`[dry-run]   ${entityPlan.length} entities, ${conceptNotes.length} concepts`);
     result.skipped = true;
     return result;
   }
 
   ensureDirs();
 
-  const meetingSlug = `${date}-${slug}`;
+  const meetingSlug = `${date}-${meetingSlugFor(meeting.title)}`;
   // Distinct basename so [[meetingSlug]] always resolves to the meeting page
   const sourceSlug = `${meetingSlug}-source`;
-
-  // Resolve entities against existing entity or concept pages before writing anything,
-  // so no first-name, flat, or cross-folder duplicates get created
-  const entityPlan: Array<{ entity: Entity; path: string; exists: boolean }> = [];
-  for (const entity of entities) {
-    const existing = findPagePath(entity.slug);
-    if (existing) entityPlan.push({ entity, path: existing, exists: true });
-    else if (isFirstNameOnly(entity)) result.unresolved.push(entity.name);
-    else entityPlan.push({ entity, path: newEntityPath(entity), exists: false });
-  }
-  const resolved: ProcessedMeeting = { ...processed, entities: entityPlan.map((p) => p.entity) };
 
   // Links may only point at pages that exist or are being created now
   const known = allWikiSlugs();
@@ -577,7 +654,7 @@ export function wikiIngest(
 
   // Meeting page
   const meetingPath = `wiki/meetings/${meetingSlug}.md`;
-  if (writePage(meetingPath, buildMeetingPage(resolved, known, sourceSlug))) {
+  if (writePage(meetingPath, buildMeetingPage(resolved, known, sourceSlug, attendees))) {
     result.pagesCreated.push(meetingPath);
   }
 

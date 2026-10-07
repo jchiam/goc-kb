@@ -33,6 +33,11 @@ Surface Granola meetings that haven't been ingested into the knowledge base yet,
    ```
    Then diff the refreshed `.raw/transcripts/` file against git, and hand-apply corrections (names, terms, facts) to the meeting, source, entity, and concept pages that came from that meeting.
 8. Report results: pages created, pages updated, any errors.
+9. Work through `needsReview` from the ingest JSON with the user before moving on. Ask, then hand-apply the answers to the meeting, source, and entity pages:
+   - `attendees`: Granola recorded only the owner (page has `attendees_verified: false`). Ask who attended; set the list and drop the flag.
+   - `unowned-action`: an action written `(owner?)`. Ask who owns it; replace with `@[[slug]]`.
+   - `inferred-role`: a claim the LLM could only infer from the transcript (e.g. a reporting line). Confirm or correct before it goes on any page.
+   - `ambiguous-mention`: a first name matching several people; that entity update was held. Ask which person, then add the update to their page.
 
 ## Notes
 
