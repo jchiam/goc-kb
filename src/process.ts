@@ -56,18 +56,24 @@ interface LLMOutput {
 }
 
 function parseResponse(text: string): LLMOutput {
-  const cleaned = text
+  const stripped = text
     .replace(/^```(?:json)?\s*\n?/, '')
     .replace(/\n?```\s*$/, '')
     .trim();
+  // Tolerate prose or a stray fence around the JSON object
+  const start = stripped.indexOf('{');
+  const end = stripped.lastIndexOf('}');
+  const cleaned = start >= 0 && end > start ? stripped.slice(start, end + 1) : stripped;
 
   let parsed: LLMOutput;
   try {
     parsed = JSON.parse(cleaned) as LLMOutput;
   } catch (err) {
-    const pos = (err instanceof SyntaxError && 'position' in err) ? (err as SyntaxError & { position?: number }).position ?? -1 : -1;
-    const snippet = pos >= 0 ? cleaned.slice(Math.max(0, pos - 80), pos + 80) : cleaned.slice(0, 200);
-    throw new Error(`Claude response is not valid JSON near position ${pos}:\n${snippet}\n\nFull response length: ${cleaned.length} chars`);
+    const msg = err instanceof Error ? err.message : String(err);
+    const m = msg.match(/position (\d+)/);
+    const pos = m ? Number(m[1]) : -1;
+    const snippet = pos >= 0 ? cleaned.slice(Math.max(0, pos - 80), pos + 80) : cleaned.slice(-200);
+    throw new Error(`Claude response is not valid JSON (${msg}) near position ${pos}:\n${snippet}\n\nFull response length: ${cleaned.length} chars`);
   }
 
   if (typeof parsed.meetingNote !== 'string') throw new Error('Response missing meetingNote');
