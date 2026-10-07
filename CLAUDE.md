@@ -81,7 +81,9 @@ npm run build                            # tsc compile to dist/
 
 **Attribution guardrails**: transcripts have no speaker labels, so the LLM must not attribute statements, reporting lines, or handover direction from the transcript alone; action items without a Notes/Summary owner are written `(owner?)`; anything inferred goes in `inferences`. Attendees are taken from Granola (resolved to page titles via title/alias, deduped), never from the LLM; when Granola only has the owner the page gets `attendees_verified: false`.
 
-**Review list**: `IngestResult.needsReview` collects unverified attendees, `(owner?)` actions, LLM `inferences`, and ambiguous first-name mentions (a `mention` matching 2+ person pages, e.g. "Darren"; that entity update is held, not written). Also logged to `wiki/log.md`.
+**Review list**: `IngestResult.needsReview` collects unverified attendees, invitees the transcript suggests were absent (`absentInvitees`), `(owner?)` actions, named owners whose `ownerCitations` quote is not found in Notes/Summary, up to 5 LLM `inferences` (reporting lines, attendance, owners only), and ambiguous first-name mentions (a `mention` matching 2+ person pages, e.g. "Darren"; that entity update is held unless the chosen person's full name appears in Notes, Summary, or Granola attendees). Also logged to `wiki/log.md`. The Summary is treated as partly AI-written: claims about the vault owner's own reporting line, transfer, or promotion are written neutrally and always go to review.
+
+**Dry runs** skip the manifest check (they write nothing), so already-ingested meetings can be re-run to test prompt changes; the output includes the LLM JSON under `llm`.
 
 **Meeting slugs**: `meetingSlugFor()` rewrites `1-1`/`1on1`/`1-on-1`/`one-on-one` to the vault's `11`. Raw source paths keep the plain slugify form because dedupe derives them from the Granola title.
 

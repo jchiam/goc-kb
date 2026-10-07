@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { MeetingDetail, ProcessedMeeting, ConceptNote, Entity } from './types.js';
+import type { MeetingDetail, ProcessedMeeting, ConceptNote, Entity, OwnerCitation } from './types.js';
 import { conceptRoster, entityRoster, vaultOwner } from './vault.js';
 
 const client = new Anthropic();
@@ -78,6 +78,8 @@ interface LLMOutput {
   conceptNotes: ConceptNote[];
   entities: Entity[];
   inferences?: string[];
+  absentInvitees?: string[];
+  ownerCitations?: OwnerCitation[];
 }
 
 function parseResponse(text: string): LLMOutput {
@@ -105,6 +107,8 @@ function parseResponse(text: string): LLMOutput {
   if (!Array.isArray(parsed.conceptNotes)) throw new Error('Response missing conceptNotes');
   if (!Array.isArray(parsed.entities)) parsed.entities = [];
   if (!Array.isArray(parsed.inferences)) parsed.inferences = [];
+  if (!Array.isArray(parsed.absentInvitees)) parsed.absentInvitees = [];
+  if (!Array.isArray(parsed.ownerCitations)) parsed.ownerCitations = [];
 
   return parsed;
 }
@@ -144,5 +148,7 @@ export async function processMeeting(meeting: MeetingDetail): Promise<ProcessedM
     conceptNotes: output.conceptNotes,
     entities: output.entities,
     inferences: output.inferences ?? [],
+    absentInvitees: output.absentInvitees ?? [],
+    ownerCitations: output.ownerCitations ?? [],
   };
 }

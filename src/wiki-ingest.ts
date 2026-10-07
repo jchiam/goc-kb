@@ -10,12 +10,14 @@ import {
   loadCorrections,
   newEntityPath,
   normName,
+  normText,
   peopleWithFirstName,
   resolvePersonName,
   vaultOwner,
 } from './vault.js';
 
 const VAULT_PATH = process.env.VAULT_PATH ?? process.env.OBSIDIAN_VAULT_PATH ?? '/vault';
+const MAX_INFERENCES = 5;
 
 export interface IngestResult {
   sourcePath: string;
@@ -582,16 +584,21 @@ export function wikiIngest(
     skipped: false,
   };
 
-  // Check manifest for already-ingested
+  // Check manifest for already-ingested. Dry runs write nothing, so they skip this check
+  // and can re-run an ingested meeting to test prompt changes
   const manifest = loadManifest();
   const rawAbsPath = join(VAULT_PATH, rawRelPath);
-  if (existsSync(rawAbsPath)) {
+  if (!opts.dryRun && existsSync(rawAbsPath)) {
     const hash = md5(readFileSync(rawAbsPath, 'utf-8'));
     if (manifest.sources[rawRelPath]?.hash === hash) {
       result.skipped = true;
       return result;
     }
   }
+
+  // Notes, Summary and Granola attendees are the sources the LLM may cite; the transcript is not
+  const trusted = normText([meeting.notes, meeting.summary, ...meeting.attendees].join('\n'));
+  const ownerSlug = resolvePersonName(vaultOwner().name)?.slug;
 
   const attendees = resolveAttendees(meeting.attendees);
   if (!attendees.verified) {
@@ -600,26 +607,72 @@ export function wikiIngest(
       detail: `Granola recorded only ${attendees.names.join(', ') || 'no one'}; confirm who attended`,
     });
   }
+  for (const name of processed.absentInvitees) {
+    result.needsReview.push({
+      kind: 'absent-invitee',
+      detail: `${name} was invited but the transcript suggests they did not attend; keep or remove`,
+    });
+  }
   for (const line of processed.meetingNote.split('\n')) {
     const task = line.match(/^- \[ \] \(owner\?\)\s*(.+)$/);
     if (task) result.needsReview.push({ kind: 'unowned-action', detail: task[1].trim() });
   }
-  for (const claim of processed.inferences) {
+  // The LLM sometimes names an owner the source never gives. Its quote must appear in Notes
+  // or Summary AND name the owner (first name, full name, or alias); quoting the bare task
+  // text proves the task exists, not who owns it. The owner's own first-person Notes count.
+  const ownerNames = (slug: string): string[] => {
+    const page = resolvePersonName(slug.replace(/-/g, ' ')) ?? peopleWithFirstName(slug.split('-')[0]).find((p) => p.slug === slug);
+    const names = page ? [page.title, ...page.aliases] : [slug.replace(/-/g, ' ')];
+    return names.flatMap((n) => [normText(n), normText(n).split(' ')[0]]).filter(Boolean);
+  };
+  const ownerAliases = [vaultOwner().name, ...vaultOwner().aliases].map(normText).filter(Boolean);
+  const notesText = normText(meeting.notes);
+  const uncited = new Map<string, string[]>();
+  for (const line of processed.meetingNote.split('\n')) {
+    const m = line.match(/^- \[ \] @(?:\[\[([^\]|]+)[^\]]*\]\]|(\S+))/);
+    if (!m) continue;
+    const owner = m[1] ?? m[2];
+    const item = normText(line);
+    const cited = processed.ownerCitations.some((c) => {
+      const quote = normText(c.quote);
+      const task = normText(c.task).slice(0, 30);
+      if (!quote || !task || !item.includes(task) || !trusted.includes(quote)) return false;
+      const words = new Set(quote.split(' '));
+      const named = ownerNames(owner).some((n) => (n.includes(' ') ? quote.includes(n) : words.has(n)));
+      const firstPerson = owner === ownerSlug && notesText.includes(quote) && /\b(i|i ll|i will|me|my)\b/.test(quote);
+      return named || firstPerson || ownerAliases.some((a) => owner === ownerSlug && words.has(a.split(' ')[0]));
+    });
+    if (!cited) {
+      const task = line.replace(/^- \[ \] @(?:\[\[[^\]]+\]\]|\S+)\s*/, '').trim();
+      uncited.set(owner, [...(uncited.get(owner) ?? []), task]);
+    }
+  }
+  // One item per owner: confirming "these 6 are all mine" is one question, not six
+  for (const [owner, tasks] of uncited) {
+    result.needsReview.push({
+      kind: 'uncited-owner',
+      detail: `${tasks.length} action(s) assigned to ${owner} without a source naming them: ${tasks.map((t) => `"${t.slice(0, 60)}"`).join('; ')}`,
+    });
+  }
+  // Keep only high-value inferences, as the prompt asks; the review list stays short
+  for (const claim of processed.inferences.slice(0, MAX_INFERENCES)) {
     result.needsReview.push({ kind: 'inferred-role', detail: claim });
   }
 
   // Resolve entities against existing entity or concept pages before writing anything,
   // so no first-name, flat, or cross-folder duplicates get created
-  const ownerSlug = resolvePersonName(vaultOwner().name)?.slug;
   const entityPlan: Array<{ entity: Entity; path: string; exists: boolean }> = [];
   for (const entity of entities) {
     const existing = findPagePath(entity.slug);
     // A bare first name shared by several people ("Darren") could be any of them; hold
-    // the update rather than write it onto the wrong person's page
+    // the update rather than write it onto the wrong person's page, unless the user's own
+    // Notes, Summary or invite list names the chosen person in full
     const mention = entity.mention?.trim() ?? '';
     const namesakes =
       entity.entity_type === 'person' && mention && entity.slug !== ownerSlug ? peopleWithFirstName(mention) : [];
-    if (namesakes.length > 1) {
+    const chosen = namesakes.find((p) => p.slug === entity.slug);
+    const confirmed = chosen ? [chosen.title, ...chosen.aliases].some((n) => trusted.includes(normText(n))) : false;
+    if (namesakes.length > 1 && !confirmed) {
       result.needsReview.push({
         kind: 'ambiguous-mention',
         detail: `"${mention}" could be ${namesakes.map((p) => p.slug).join(' or ')}; LLM chose ${entity.slug}, update held`,

@@ -38,7 +38,7 @@ export interface Entity {
 
 /** Something the pipeline could not settle from the source; surfaced for a human to confirm. */
 export interface ReviewItem {
-  kind: 'attendees' | 'ambiguous-mention' | 'unowned-action' | 'inferred-role';
+  kind: 'attendees' | 'absent-invitee' | 'ambiguous-mention' | 'unowned-action' | 'uncited-owner' | 'inferred-role';
   detail: string;
 }
 
@@ -49,5 +49,15 @@ export interface ProcessedMeeting {
   entities: Entity[];
   /** Claims the LLM could only infer from the unlabelled transcript, e.g. a reporting line */
   inferences: string[];
+  /** Granola invitees the transcript suggests were not there */
+  absentInvitees: string[];
+  /** For each named action owner, the Notes/Summary phrase that names them */
+  ownerCitations: OwnerCitation[];
+}
+
+export interface OwnerCitation {
+  owner: string;
+  task: string;
+  quote: string;
 }
 

@@ -135,6 +135,14 @@ export function normName(name: string): string {
     .trim();
 }
 
+/** Lowercased, punctuation-insensitive form for checking that a quote appears in a source. */
+export function normText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 function personNames(page: RosterPage): string[] {
   return [page.title, ...page.aliases].map(normName);
 }

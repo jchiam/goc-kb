@@ -22,7 +22,17 @@ Return ONLY valid JSON — no prose, no markdown fences, no explanation. The JSO
     }
   ],
   "inferences": [
-    "Each claim you could only infer from the transcript, not read from Notes or Summary"
+    "At most 5 short sentences; only reporting lines, attendance, or action owners you could not read from Notes or Summary"
+  ],
+  "absentInvitees": [
+    "Full name of each Granola attendee the transcript suggests did not attend"
+  ],
+  "ownerCitations": [
+    {
+      "owner": "slug of the action owner",
+      "task": "start of the action item text",
+      "quote": "exact phrase from Notes or Summary that names this owner for this task"
+    }
   ]
 }
 
@@ -76,13 +86,15 @@ Rules for meeting notes:
 Rules for attendees:
 - Copy the Granola attendees from the input into `attendees`, without duplicates (e.g. "Ryan Zhuang" and "Ryan_zhuang" are one person). Use the existing page title where one matches a name or alias
 - Never add attendees from the transcript. Someone being named or addressed ("Hey Benny", "Darren's here", "catch Benny later") does not show they attended. The pipeline flags short attendee lists for the user to complete
+- Granola attendees are calendar invitees, not confirmed attendance. If the transcript talks about an invitee in the third person as someone absent ("catch Benny later", "today he'll be back", "ask Benny why"), list them in `absentInvitees`. Keep them in `attendees`; the user decides
 
 Rules for attribution (who said, owns, or reports to whom):
 - The vault owner recorded these meetings. Write from their side, by full name. In the transcript they may appear as a mishearing of their name (e.g. "John" for "Jon")
 - The transcript has no speaker labels. Never attribute a statement, opinion, or commitment to a named person from the transcript alone. Write "it was noted that…" unless Notes or Summary names the speaker
 - Reporting lines and handovers (who reports to whom, who takes over from whom, who is outgoing) must come from Notes, Summary, or an existing page's description. Never infer their direction. If the meeting implies one but does not state it, leave it out of the note and add it to `inferences`
-- Action items: name an owner only when Notes or Summary names one (e.g. "Next steps… (Jarrett)"), or the item is a first-person commitment in the user's own Notes. Otherwise write `- [ ] (owner?) Description of task`. A guessed owner is worse than none
-- Anything else you could only infer from the transcript and that matters (a role, an attendee, a decision owner) goes in `inferences` as one short sentence each. Leave `inferences` empty when there is nothing to report
+- The Summary is AI-generated too; only some of it was edited by the user, and it often swaps who is who when the vault owner talks about someone else. For statements about the vault owner's own reporting line, manager, transfer, or promotion, write them neutrally on the meeting note (e.g. "a promotion write-up is pending", "a transfer to TPEO is being explored") without naming whose, and add the claim to `inferences`. Never put such a claim on the vault owner's entity description
+- Action items: name an owner only when Notes or Summary names one next to that task (e.g. "Next steps… (Jarrett)", "@Evelyn redirect…"), or the item is a first-person commitment in the user's own Notes. For every owner you name, add an `ownerCitations` entry quoting the exact phrase that names them. If you cannot quote one, write `- [ ] (owner?) Description of task` instead. A guessed owner is worse than none
+- `inferences`: at most 5, one short sentence each, and only about reporting lines, who attended, or action owners. Do not list guesses about people's job titles, what an acronym stands for, or background colour. Leave it empty when there is nothing to report
 
 ---
 

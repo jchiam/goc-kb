@@ -39,7 +39,16 @@ async function main() {
   // Dry runs also show what the LLM produced, so prompt changes can be checked against
   // already-corrected pages without writing anything
   const output = dryRun
-    ? { ...result, llm: { meetingNote: processed.meetingNote, entities: processed.entities, inferences: processed.inferences } }
+    ? {
+        ...result,
+        llm: {
+          meetingNote: processed.meetingNote,
+          entities: processed.entities,
+          inferences: processed.inferences,
+          absentInvitees: processed.absentInvitees,
+          ownerCitations: processed.ownerCitations,
+        },
+      }
     : result;
   console.log(JSON.stringify(output, null, 2));
 }
