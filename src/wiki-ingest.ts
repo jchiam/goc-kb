@@ -90,37 +90,23 @@ function hasDragonScale(): boolean {
   );
 }
 
-let flockAvailable: boolean | undefined;
-
-function hasFlock(): boolean {
-  if (flockAvailable === undefined) {
-    try {
-      execSync('command -v flock', { stdio: 'ignore' });
-      flockAvailable = true;
-    } catch {
-      flockAvailable = false;
-    }
-  }
-  return flockAvailable;
-}
-
+/**
+ * Reserve the next address via the vault's flock-guarded script, the only sanctioned writer
+ * of the counter. On failure the page is written without an address (lint flags it).
+ */
 function allocateAddress(): string | null {
   if (!hasDragonScale()) return null;
-  if (hasFlock()) {
-    try {
-      return execSync('./scripts/allocate-address.sh', { cwd: VAULT_PATH, encoding: 'utf-8' }).trim();
-    } catch {
-      return null;
-    }
+  try {
+    return execSync('./scripts/allocate-address.sh', {
+      cwd: VAULT_PATH,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr?.trim();
+    console.error(`allocate-address.sh failed, page left unaddressed (flock installed?): ${stderr || err}`);
+    return null;
   }
-  // macOS ships without flock and the script would time out on every call. This CLI is the
-  // only writer while it runs, so bump the counter directly (same format as the script).
-  const counterPath = join(VAULT_PATH, '.vault-meta/address-counter.txt');
-  if (!existsSync(counterPath)) return null;
-  const current = parseInt(readFileSync(counterPath, 'utf-8').trim(), 10);
-  if (!Number.isInteger(current)) return null;
-  writeFileSync(counterPath, `${current + 1}\n`, 'utf-8');
-  return `c-${String(current).padStart(6, '0')}`;
 }
 
 /**

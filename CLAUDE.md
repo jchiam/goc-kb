@@ -91,7 +91,7 @@ npm run build                            # tsc compile to dist/
 
 **Entity/concept resolution**: `process.ts` sends the LLM the vault's existing entity and concept rosters (`vault.ts`), with each page's role or first sentence and aliases, so it reuses canonical slugs (e.g. "Jarrett" → `jarrett-yeap`) and can tell same-named pages apart. `wiki-ingest.ts` then resolves each slug across all entity sub-folders: existing pages get an `## Update (date)` section + Mentioned In link; first-name-only person slugs with no match are never created and are reported in `unresolved`. Links to pages that neither exist nor are being created are rewritten as plain text. Mentioned In links point at the meeting page slug.
 
-**Addresses**: uses the vault's `scripts/allocate-address.sh` when `flock` exists; otherwise (macOS) increments `.vault-meta/address-counter.txt` directly.
+**Addresses**: always via the vault's `scripts/allocate-address.sh` (needs `flock`: `brew install flock`). On failure the page is written unaddressed and a warning goes to stderr.
 
 **Prompt files**: Edit `orchestrator/prompts/meeting-note.md` to tune output format.
 
