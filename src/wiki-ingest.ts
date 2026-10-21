@@ -123,11 +123,15 @@ function allocateAddress(): string | null {
   return `c-${String(current).padStart(6, '0')}`;
 }
 
-/** Turn [[slug]] / [[slug|label]] links to pages that don't exist into plain text. */
+/**
+ * Turn [[slug]] / [[slug|label]] links to pages that don't exist into plain text.
+ * `.raw/` targets become code-formatted paths: the vault never wikilinks raw sources.
+ */
 function unlinkUnknown(markdown: string, known: Set<string>): string {
   return markdown.replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (link, target: string, label?: string) => {
     const slug = target.trim();
-    if (known.has(slug) || slug.startsWith('.raw/')) return link;
+    if (slug.startsWith('.raw/')) return `\`${slug}\``;
+    if (known.has(slug)) return link;
     return label ?? slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   });
 }
@@ -142,14 +146,26 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * Fix known speech-to-text errors in everything the LLM produced, before any page or slug
- * is derived from it. Slugs get the kebab-case form of each correction.
+ * Vault style bans em/en dashes as punctuation. The prompt asks for none; this catches slips.
+ * Ranges ("2–5", "Jan–May") become "2 to 5", spaced dashes a colon, unspaced em dashes a
+ * comma. Only spaced `--` counts, so `---` frontmatter and table rules survive.
+ */
+export function stripDashes(text: string): string {
+  return text
+    .replace(/(\d)\s*–\s*(\d)/g, '$1 to $2')
+    .replace(/ +(?:—|–|--) +/g, ': ')
+    .replace(/(\w)–(\w)/g, '$1 to $2')
+    .replace(/\s*[—–]\s*/g, ', ');
+}
+
+/**
+ * Fix known speech-to-text errors and banned dashes in everything the LLM produced, before
+ * any page or slug is derived from it. Slugs get the kebab-case form of each correction.
  */
 export function applyCorrections(processed: ProcessedMeeting): ProcessedMeeting {
   const pairs = Object.entries(loadCorrections());
-  if (pairs.length === 0) return processed;
   const fixText = (text: string) =>
-    pairs.reduce((t, [from, to]) => t.replace(new RegExp(`\\b${escapeRegExp(from)}\\b`, 'g'), to), text);
+    stripDashes(pairs.reduce((t, [from, to]) => t.replace(new RegExp(`\\b${escapeRegExp(from)}\\b`, 'g'), to), text));
   const fixSlug = (slug: string) =>
     pairs.reduce(
       (s, [from, to]) => s.replace(new RegExp(`(^|-)${escapeRegExp(slugify(from))}(?=-|$)`, 'g'), `$1${slugify(to)}`),
@@ -329,7 +345,7 @@ function buildSourcePage(processed: ProcessedMeeting, rawRelPath: string, meetin
     for (const r of related) fm.push(`  - ${r}`);
   }
   fm.push('sources:');
-  fm.push(`  - "[[${rawRelPath}]]"`);
+  fm.push(`  - "${rawRelPath}"`);
   fm.push('---');
 
   const body = [
@@ -345,7 +361,7 @@ function buildSourcePage(processed: ProcessedMeeting, rawRelPath: string, meetin
     '',
     '## Source',
     '',
-    `- [[${rawRelPath}]]`,
+    `- \`${rawRelPath}\``,
     '',
   ];
 
